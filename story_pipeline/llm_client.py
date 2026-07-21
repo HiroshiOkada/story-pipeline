@@ -77,11 +77,27 @@ class LLMClient:
         assert last_failure is not None
         raise last_failure
 
+    def probe_model(self, reference: str) -> int:
+        """創作 count 外の固定 `OK` 応答で単一モデルの接続を確認する。"""
+        messages = [
+            {"role": "system", "content": "Reply with exactly OK."},
+            {"role": "user", "content": "Connection check. Reply with exactly OK."},
+        ]
+        try:
+            response, attempts = self._complete_model(reference, messages, None, max_tokens_override=8)
+        except _ModelExhausted as exhausted:
+            raise exhausted.failure from None
+        if response.content.strip() != "OK":
+            raise ApiFailure("invalid_response", "接続確認の固定応答が OK ではありません")
+        return attempts
+
     def _complete_model(
         self,
         reference: str,
         messages: list[dict[str, str]],
         response_format: dict[str, Any] | None,
+        *,
+        max_tokens_override: int | None = None,
     ) -> tuple[ChatResponse, int]:
         model = self.config["models"][reference]
         provider_name = model["provider"]
@@ -101,7 +117,7 @@ class LLMClient:
                         api_key=api_key,
                         model=model["model"],
                         messages=messages,
-                        max_tokens=model["max_tokens"],
+                        max_tokens=model["max_tokens"] if max_tokens_override is None else max_tokens_override,
                         parameters=parameters,
                         timeout=self.config["request"]["timeout_seconds"],
                         response_format=response_format,
