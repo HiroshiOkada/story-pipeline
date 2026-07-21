@@ -15,6 +15,7 @@ from story_pipeline.git_validation import (
     _validate_git_operation,
     classify_path,
     read_worktree,
+    normalize_git_path,
 )
 from story_pipeline.validation import IssueCollector
 
@@ -88,6 +89,98 @@ def restore_managed_files(root: Path, preflight: GitPreflight, output: TextIO) -
     if remaining:
         raise _git_error("CLI 管理ファイルの変更が復元後も残っています", sorted(remaining)[0])
     return targets
+
+
+def commit_start_inputs(
+    root: Path,
+    request_number: int,
+    paths: tuple[str, ...],
+    additional_materials: tuple[str, ...] = (),
+) -> str | None:
+    """要求・設定・検査済み追加資料だけを開始時コミットへ保存する。"""
+    body = tuple(f"Additional material: {path}" for path in additional_materials)
+    return commit_explicit_paths(
+        root,
+        paths,
+        f"Record request {request_number:04d} input",
+        body,
+    )
+
+
+def commit_run_outputs(
+    root: Path,
+    request_number: int,
+    status: str,
+    paths: tuple[str, ...],
+    body: tuple[str, ...] = (),
+) -> str | None:
+    """今回変更した管理ファイルだけを終了時コミットへ保存する。"""
+    if status not in {"completed", "failed", "awaiting-human"}:
+        raise ValueError("終了 status が不正です")
+    for path in paths:
+        if classify_path(path) != "managed":
+            raise _git_error("終了時コミットに管理対象外パスが指定されました", path)
+    return commit_explicit_paths(
+        root,
+        paths,
+        f"Complete request {request_number:04d}: {status}",
+        body,
+    )
+
+
+def commit_explicit_paths(
+    root: Path,
+    paths: tuple[str, ...],
+    subject: str,
+    body: tuple[str, ...] = (),
+) -> str | None:
+    """明示したファイル集合だけを stage し、完全一致を確認して commit する。"""
+    expected = _validate_explicit_paths(paths)
+    if not expected:
+        return None
+    result = _git(root, ["add", "--", *sorted(expected)])
+    if result is None or result.returncode != 0:
+        raise _git_error("指定ファイルを stage できません", sorted(expected)[0])
+    staged = _staged_paths(root)
+    if staged != expected:
+        _unstage_our_paths(root, expected)
+        raise _git_error("stage 済みパスが予定集合と一致しません", root)
+    arguments = ["commit", "-m", subject]
+    for paragraph in body:
+        arguments.extend(["-m", paragraph])
+    result = _git(root, arguments)
+    if result is None or result.returncode != 0:
+        _unstage_our_paths(root, expected)
+        raise _git_error("Git commit に失敗しました", root)
+    commit = _git_text(root, ["rev-parse", "HEAD"])
+    if commit is None:
+        raise _git_error("作成した commit を確認できません", root)
+    return commit
+
+
+def _validate_explicit_paths(paths: tuple[str, ...]) -> set[str]:
+    normalized: set[str] = set()
+    for value in paths:
+        path = normalize_git_path(value)
+        if path is None or path == "." or value.endswith("/"):
+            raise _git_error("commit 対象に安全でないパスが指定されました", value)
+        normalized.add(path)
+    return normalized
+
+
+def _staged_paths(root: Path) -> set[str]:
+    result = _git(root, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB"])
+    if result is None or result.returncode != 0:
+        raise _git_error("stage 済みパスを確認できません", root)
+    return {
+        path
+        for value in result.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+        if value and (path := normalize_git_path(value)) is not None
+    }
+
+
+def _unstage_our_paths(root: Path, paths: set[str]) -> None:
+    _git(root, ["restore", "--staged", "--", *sorted(paths)])
 
 
 def _inspect_index_flags(
