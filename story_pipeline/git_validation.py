@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
-from typing import Any
+from typing import Any, Literal
 
+from story_pipeline.errors import StoryPipelineError
 from story_pipeline.validation import IssueCollector
 
 
@@ -29,6 +30,22 @@ class WorktreeEntry:
     index_status: str
     worktree_status: str
     kind: str
+    rename_origin: bool = False
+
+    def normalized_path(self) -> str:
+        """Git の出力パスを検証して正規化する。"""
+        normalized = normalize_git_path(self.path)
+        if normalized is None:
+            raise StoryPipelineError(
+                "Git が安全でないパスを報告しました",
+                self.path,
+                "リポジトリの状態とパス名を確認してください",
+                5,
+            )
+        return normalized
+
+
+PathClassification = Literal["managed", "human", "temporary", "unexpected"]
 
 
 def validate_git(
@@ -56,7 +73,11 @@ def validate_git(
         collector.error("GIT_DETACHED_HEAD", "detached HEAD では実行できません", "HEAD")
     _validate_git_operation(root, collector)
     configured_dotenv = _configured_dotenv_paths(root, config)
-    entries = _read_worktree(root, collector)
+    try:
+        entries = read_worktree(root)
+    except StoryPipelineError:
+        collector.error("GIT_STATUS_FAILED", "Git 作業ツリーの状態を取得できません")
+        entries = []
     for entry in entries:
         _validate_entry(entry, collector, configured_dotenv)
     protected_paths = TEMPORARY | configured_dotenv
@@ -85,11 +106,16 @@ def _validate_git_operation(root: Path, collector: IssueCollector) -> None:
             collector.error("GIT_OPERATION_IN_PROGRESS", f"{operation} 操作中です", f".git/{marker}")
 
 
-def _read_worktree(root: Path, collector: IssueCollector) -> list[WorktreeEntry]:
+def read_worktree(root: Path) -> list[WorktreeEntry]:
+    """porcelain v2 の NUL 区切り出力を読み、rename 元を含めて返す。"""
     result = _git(root, ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignored=matching"])
-    if result is None:
-        collector.error("GIT_STATUS_FAILED", "Git 作業ツリーの状態を取得できません")
-        return []
+    if result is None or result.returncode != 0:
+        raise StoryPipelineError(
+            "Git 作業ツリーの状態を取得できません",
+            str(root),
+            "Git リポジトリとアクセス権を確認してください",
+            5,
+        )
     records = result.stdout.decode("utf-8", errors="surrogateescape").split("\0")
     entries: list[WorktreeEntry] = []
     index = 0
@@ -112,13 +138,28 @@ def _read_worktree(root: Path, collector: IssueCollector) -> list[WorktreeEntry]
             fields = record.split(" ", 9)
             if len(fields) == 10:
                 entries.append(WorktreeEntry(fields[9], fields[1][0], fields[1][1], "tracked"))
-                index += 1  # rename/copy の元パス
+                if index >= len(records) or not records[index]:
+                    raise _invalid_porcelain_record(record)
+                entries.append(
+                    WorktreeEntry(records[index], fields[1][0], fields[1][1], "tracked", True)
+                )
+                index += 1
             continue
         if prefix == "u":
             fields = record.split(" ", 10)
             if len(fields) == 11:
                 entries.append(WorktreeEntry(fields[10], "U", "U", "unmerged"))
+        raise _invalid_porcelain_record(record)
     return entries
+
+
+def _invalid_porcelain_record(record: str) -> StoryPipelineError:
+    return StoryPipelineError(
+        "Git 状態の出力形式を解釈できません",
+        record[:80],
+        "Git のバージョンとリポジトリの状態を確認してください",
+        5,
+    )
 
 
 def _validate_entry(
@@ -126,11 +167,11 @@ def _validate_entry(
     collector: IssueCollector,
     configured_dotenv: set[str],
 ) -> None:
-    path = _normalize_git_path(entry.path)
+    path = normalize_git_path(entry.path)
     if path is None:
         collector.error("GIT_PATH_INVALID", "Git が安全でないパスを報告しました", entry.path)
         return
-    classification = _classify(path, configured_dotenv)
+    classification = classify_path(path, configured_dotenv)
     if entry.kind == "ignored":
         return
     if entry.kind == "unmerged":
@@ -169,12 +210,14 @@ def _validate_temporary_tracking(
             collector.error("TRACKED_TEMPORARY_FILE", "秘密またはロック用ファイルが追跡されています", path)
 
 
-def _classify(path: str, configured_dotenv: set[str]) -> str:
+def classify_path(path: str, configured_dotenv: set[str] | None = None) -> PathClassification:
+    """正規化済み相対パスを排他的な安全分類へ割り当てる。"""
+    dotenv_paths = set() if configured_dotenv is None else configured_dotenv
     if MANAGED_FILE.fullmatch(path):
         return "managed"
     if HUMAN_INPUT.fullmatch(path) or path in INFRASTRUCTURE:
         return "human"
-    if path in TEMPORARY or path in configured_dotenv:
+    if path in TEMPORARY or path in dotenv_paths:
         return "temporary"
     return "unexpected"
 
@@ -196,7 +239,7 @@ def _configured_dotenv_paths(
     return paths
 
 
-def _normalize_git_path(value: str) -> str | None:
+def normalize_git_path(value: str) -> str | None:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or ".." in path.parts or "\\" in value:
         return None
