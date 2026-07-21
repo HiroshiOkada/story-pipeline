@@ -65,10 +65,12 @@ episodes/
 | --- | --- | --- |
 | `provider` | string | 存在する provider 名 |
 | `model` | string | 空でない API 上のモデル識別子 |
-| `max_tokens` | integer | 1 以上 |
+| `max_tokens` | integer | 任意。1 以上。省略時は `131072` |
 | `parameters` | object | 任意。温度など Chat Completions API の追加パラメーター |
 
 `parameters` に `model`、`messages`、`max_tokens`、認証情報、URL を指定してはならない。role の値はモデル名の非空配列で、全参照先が存在し、重複しないものとする。
+
+`max_tokens` の実効値は、設定値があればその値、なければ 128K トークンを表す `131072` とする。既定値を設定ファイルへ自動追記せず、読み込み後の正規化済み設定へだけ補完する。明示値が `131072` より大きい場合も上書きしない。
 
 ### 2.4 制限値
 
