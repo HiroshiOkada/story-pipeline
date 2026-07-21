@@ -181,7 +181,7 @@ def _git_text(root: Path, arguments: list[str]) -> str | None:
 def _git(root: Path, arguments: list[str]) -> subprocess.CompletedProcess[bytes] | None:
     try:
         return subprocess.run(
-            ["git", "-C", str(root), *arguments],
+            ["git", "--no-optional-locks", "-C", str(root), *arguments],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
