@@ -32,6 +32,7 @@ class StatusSnapshot:
     root: Path
     state: dict[str, Any]
     last_request_status: str | None
+    lock_info: str | None
     warnings: tuple[StatusWarning, ...]
 
 
@@ -81,8 +82,8 @@ def inspect_status(root: Path, state: dict[str, Any]) -> StatusSnapshot:
     _check_phase_artifacts(root, state["phase"], warnings)
     _check_request_files(root, state, warnings)
     last_status = _read_last_request_status(root, state["last_request"], warnings)
-    _check_lock(root, warnings)
-    return StatusSnapshot(root, state, last_status, tuple(warnings))
+    lock_info = _read_lock(root, warnings)
+    return StatusSnapshot(root, state, last_status, lock_info, tuple(warnings))
 
 
 def _check_completed_files(
@@ -178,22 +179,22 @@ def _read_last_request_status(
     return status
 
 
-def _check_lock(root: Path, warnings: list[StatusWarning]) -> None:
+def _read_lock(root: Path, warnings: list[StatusWarning]) -> str | None:
     relative = Path(".story-pipeline") / "run.lock"
     path = root / relative
     if not path.exists() and not path.is_symlink():
-        return
+        return None
     if not _safe_regular_file(root, relative):
         warnings.append(StatusWarning("LOCK_INVALID", "run.lock が安全な通常ファイルではありません。"))
-        return
+        return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         pid = value["pid"]
         hostname = value["hostname"]
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         warnings.append(StatusWarning("LOCK_INVALID", "run.lock のプロセス情報を読み取れません。"))
-        return
-    warnings.append(StatusWarning("LOCK_PRESENT", f"実行ロックがあります: pid={pid}, hostname={hostname}"))
+        return None
+    return f"pid={pid}, hostname={hostname}"
 
 
 def _numbered_files(root: Path, relative_directory: Path) -> list[int]:

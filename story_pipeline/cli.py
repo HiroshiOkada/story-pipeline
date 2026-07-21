@@ -9,7 +9,12 @@ import subprocess
 import sys
 
 from story_pipeline import __version__
+from story_pipeline.config import load_config
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.project import find_project_root
 from story_pipeline.scaffold import create_scaffold
+from story_pipeline.state import load_state
+from story_pipeline.status import determine_next_action, inspect_status
 
 
 EXIT_CONFIG = 4
@@ -53,11 +58,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI を実行し、プロセス終了コードを返す。"""
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command is None:
-        parser.print_help()
-    elif args.command == "init":
-        return _init_project(args.path)
-    return 0
+    try:
+        if args.command is None:
+            parser.print_help()
+        elif args.command == "init":
+            return _init_project(args.path)
+        elif args.command == "status":
+            return _show_status()
+        return 0
+    except StoryPipelineError as error:
+        return _error(error.reason, error.location, error.action, error.exit_code)
+    except Exception:
+        return _error(
+            "予期しない内部エラーが発生しました。",
+            "story-pipeline",
+            "入力ファイルを変更せず、問題を報告してください。",
+            EXIT_IO,
+        )
 
 
 def _error(reason: str, location: str, action: str, code: int) -> int:
@@ -153,3 +170,41 @@ def _is_git_repository(root: Path) -> bool:
     except OSError:
         return False
     return result.returncode == 0
+
+
+def _show_status() -> int:
+    root = find_project_root()
+    load_config(root)
+    state = load_state(root)
+    snapshot = inspect_status(root, state)
+    last_request = _request_label(state["last_request"], snapshot.last_request_status)
+    active_request = _request_label(state["active_request"])
+    current_chapter = _number_label(state["current_chapter"])
+
+    print(f"Root: {root}")
+    print(f"Phase: {state['phase']}")
+    print(f"Last request: {last_request}")
+    print(f"Active request: {active_request}")
+    print(f"Current chapter: {current_chapter}")
+    print(f"Next episode: {state['next_episode']:04d}")
+    print(f"Completed chapters: {len(state['completed_chapters'])}")
+    print(f"Completed episodes: {len(state['completed_episodes'])}")
+    print(f"Pending reviews: {len(state['pending_reviews'])}")
+    print(f"Pending decisions: {len(state['pending_decisions'])}")
+    if snapshot.lock_info is not None:
+        print(f"Lock: {snapshot.lock_info}")
+    print(f"Next action: {determine_next_action(root, state)}")
+    for warning in snapshot.warnings:
+        print(f"Warning: {warning.code} {warning.message}", file=sys.stderr)
+    return 0
+
+
+def _request_label(number: int | None, status: str | None = None) -> str:
+    if number is None:
+        return "none"
+    suffix = "" if status is None else f" ({status})"
+    return f"{number:04d}{suffix}"
+
+
+def _number_label(number: int | None) -> str:
+    return "none" if number is None else f"{number:04d}"
