@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+from typing import Any
 
 from story_pipeline.validation import IssueCollector
 
@@ -30,7 +31,11 @@ class WorktreeEntry:
     kind: str
 
 
-def validate_git(root: Path, collector: IssueCollector) -> None:
+def validate_git(
+    root: Path,
+    collector: IssueCollector,
+    config: dict[str, Any] | None = None,
+) -> None:
     """Git 状態を変更せず、run の安全要件に関係する問題を列挙する。"""
     top_level = _git_text(root, ["rev-parse", "--show-toplevel"])
     if top_level is None:
@@ -50,11 +55,13 @@ def validate_git(root: Path, collector: IssueCollector) -> None:
     if _git_text(root, ["symbolic-ref", "-q", "HEAD"]) is None:
         collector.error("GIT_DETACHED_HEAD", "detached HEAD では実行できません", "HEAD")
     _validate_git_operation(root, collector)
+    configured_dotenv = _configured_dotenv_paths(root, config)
     entries = _read_worktree(root, collector)
     for entry in entries:
-        _validate_entry(entry, collector)
-    _validate_required_ignores(root, collector)
-    _validate_temporary_tracking(root, collector)
+        _validate_entry(entry, collector, configured_dotenv)
+    protected_paths = TEMPORARY | configured_dotenv
+    _validate_required_ignores(root, collector, protected_paths)
+    _validate_temporary_tracking(root, collector, protected_paths)
 
 
 def _validate_git_operation(root: Path, collector: IssueCollector) -> None:
@@ -114,12 +121,16 @@ def _read_worktree(root: Path, collector: IssueCollector) -> list[WorktreeEntry]
     return entries
 
 
-def _validate_entry(entry: WorktreeEntry, collector: IssueCollector) -> None:
+def _validate_entry(
+    entry: WorktreeEntry,
+    collector: IssueCollector,
+    configured_dotenv: set[str],
+) -> None:
     path = _normalize_git_path(entry.path)
     if path is None:
         collector.error("GIT_PATH_INVALID", "Git が安全でないパスを報告しました", entry.path)
         return
-    classification = _classify(path)
+    classification = _classify(path, configured_dotenv)
     if entry.kind == "ignored":
         return
     if entry.kind == "unmerged":
@@ -140,28 +151,49 @@ def _validate_entry(entry: WorktreeEntry, collector: IssueCollector) -> None:
             collector.warning("MODIFIED_UNKNOWN_FILE", "管理対象外ファイルに変更があります", path)
 
 
-def _validate_required_ignores(root: Path, collector: IssueCollector) -> None:
-    for path in sorted(TEMPORARY):
+def _validate_required_ignores(
+    root: Path, collector: IssueCollector, protected_paths: set[str]
+) -> None:
+    for path in sorted(protected_paths):
         result = _git(root, ["check-ignore", "-q", "--no-index", "--", path])
         if result is None or result.returncode != 0:
             collector.error("GITIGNORE_REQUIRED_PATTERN", "必須の除外パスが ignore されません", path)
 
 
-def _validate_temporary_tracking(root: Path, collector: IssueCollector) -> None:
-    for path in sorted(TEMPORARY):
+def _validate_temporary_tracking(
+    root: Path, collector: IssueCollector, protected_paths: set[str]
+) -> None:
+    for path in sorted(protected_paths):
         result = _git(root, ["ls-files", "--error-unmatch", "--", path])
         if result is not None and result.returncode == 0:
             collector.error("TRACKED_TEMPORARY_FILE", "秘密またはロック用ファイルが追跡されています", path)
 
 
-def _classify(path: str) -> str:
+def _classify(path: str, configured_dotenv: set[str]) -> str:
     if MANAGED_FILE.fullmatch(path):
         return "managed"
     if HUMAN_INPUT.fullmatch(path) or path in INFRASTRUCTURE:
         return "human"
-    if path in TEMPORARY:
+    if path in TEMPORARY or path in configured_dotenv:
         return "temporary"
     return "unexpected"
+
+
+def _configured_dotenv_paths(
+    root: Path, config: dict[str, Any] | None
+) -> set[str]:
+    if config is None:
+        return set()
+    paths: set[str] = set()
+    for configured in config["dotenv"]["files"]:
+        path = Path(configured)
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if relative and relative != ".":
+            paths.add(relative)
+    return paths
 
 
 def _normalize_git_path(value: str) -> str | None:

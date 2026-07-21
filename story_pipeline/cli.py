@@ -220,7 +220,7 @@ def _validate_project() -> int:
     root = find_project_root()
     collector = IssueCollector()
     context = validate_project_files(root, collector)
-    validate_git(root, collector)
+    validate_git(root, collector, context.config)
     validate_environment(context.config, collector)
     for issue in collector.issues:
         print(issue.format())

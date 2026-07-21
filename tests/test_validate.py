@@ -173,6 +173,35 @@ class ValidateCommandTest(unittest.TestCase):
             self.assertIn("ERROR API_KEY_ENV_MISSING", stdout)
             self.assertNotIn("test-only-value", stdout)
 
+    def test_configured_project_dotenv_must_be_ignored_and_untracked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.create_valid_project(root)
+            config_path = root / "story-pipeline-config.jsonc"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["dotenv"]["files"] = ["secrets.env"]
+            config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            (root / "secrets.env").write_text("OPENAI_API_KEY=secret-value\n", encoding="utf-8")
+            self.git(root, "add", "story-pipeline-config.jsonc", "secrets.env")
+            self.git(
+                root,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "Track unsafe dotenv",
+            )
+
+            code, stdout, _ = self.invoke_at(root)
+
+            self.assertEqual(code, 4)
+            self.assertIn("ERROR GITIGNORE_REQUIRED_PATTERN", stdout)
+            self.assertIn("ERROR TRACKED_TEMPORARY_FILE", stdout)
+            self.assertNotIn("secret-value", stdout)
+
     def test_validate_does_not_modify_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
