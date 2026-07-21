@@ -118,7 +118,7 @@ class LLMClient:
                         model=model["model"],
                         messages=messages,
                         max_tokens=model["max_tokens"] if max_tokens_override is None else max_tokens_override,
-                        parameters=parameters,
+                        parameters=dict(parameters),
                         timeout=self.config["request"]["timeout_seconds"],
                         response_format=response_format,
                     ),
