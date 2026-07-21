@@ -66,7 +66,7 @@ ID は要求内で一意とし、解決済み判断は配列から除く。解�
 - `next_chapter` と `next_episode` はそれぞれ完了済み最大番号より大きい。
 - 完了済み番号には対応する章または本文ファイルが存在する。
 - `completed` では未完了の review と decision がなく、`active_request` は `null` である。
-- `active_request` が非 `null` なら同番号の実行記録が存在し、その状態は `running`、`failed`、`awaiting_human` のいずれかである。
+- `active_request` が非 `null` なら同番号の実行記録が存在し、その状態は `running` または `failed` である。人間確認待ちの要求は終了済みとし、後続要求で回答するため active に残さない。
 - `last_request` は存在する実行記録の最大番号以下である。要求は番号順に処理するため、通常は最大番号と一致する。
 
 scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、request と current chapter は `null` とする。
@@ -151,7 +151,7 @@ pending -> running -> completed
                    -> failed
                    -> awaiting_human
 failed ----------- -> running
-awaiting_human ----> running
+awaiting_human -> pending（後続の回答要求）
 ```
 
 - `pending` は未処理要求がファイルとして存在し、実行記録がまだない論理状態であり、JSON には保存しない。
@@ -159,7 +159,8 @@ awaiting_human ----> running
 - 全工程と終了時コミットが成功した後に `completed` とする。
 - 自動再試行で解決できず、同じ要求から安全に再開可能なら `failed` とする。
 - 人間の選択や明示的確認が必要なら `awaiting_human` とする。
-- 終了状態では `finished_at` を設定する。再開時は status を `running`、`finished_at` を `null` に戻すが、最初の `started_at` は保持する。
+- `completed` と `awaiting_human` では `state.active_request` を `null` にする。`failed` は同じ要求の再開位置として active に残す。
+- 終了状態では `finished_at` を設定する。`failed` の再開時は status を `running`、`finished_at` を `null` に戻すが、最初の `started_at` は保持する。`awaiting_human` の実行記録は再開せず、回答を記した後続要求の新しい実行記録を作る。
 
 終了時コミットの object ID はコミット作成後にしか得られないため、`end_commit` はその終了時コミット自身を指さない。初期実装では `null` のままとし、コミット成功を Git 履歴と報告で確認する。将来、追跡コミットを導入するまで自己参照値を推測してはならない。
 
@@ -173,9 +174,11 @@ awaiting_human ----> running
 2. 要求ファイルのハッシュが `request_sha256` と一致する。
 3. 完了済み工程の出力ファイルが存在し、記録済みハッシュと一致する。
 4. 現在の設定が読み込み可能である。
-5. `awaiting_human` の場合は、後続の未処理要求が判断への回答を含む。
+5. 自動作成済みの後続要求が空またはテンプレートのままであり、再開対象とは別の新規要求が混入していない。
 
 1 つでも満たさなければ自動変更せず、`validate` の実行と人間による解決を案内する。
+
+`pending_decisions` がある場合は active request の再開ではなく、最若番号の未処理要求を回答要求として解釈する。必要な判断 ID への回答が含まれなければ `8` で停止し、その要求をコミットまたは処理しない。
 
 ### 5.2 再開位置
 
