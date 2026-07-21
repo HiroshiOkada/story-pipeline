@@ -35,6 +35,42 @@ class StatusSnapshot:
     warnings: tuple[StatusWarning, ...]
 
 
+def determine_next_action(root: Path, state: dict[str, Any]) -> str:
+    """状態から、仕様上の次の自然な作業単位を決定する。"""
+    if state["pending_decisions"]:
+        return f"answer decision {state['pending_decisions'][0]['id']}"
+    if state["active_request"] is not None:
+        return f"resume request {state['active_request']:04d}"
+    if state["pending_reviews"]:
+        review = state["pending_reviews"][0]
+        target = review["target_type"]
+        number = review["target_number"]
+        suffix = "" if number is None else f" {number:04d}"
+        return f"review {target}{suffix}"
+
+    phase = state["phase"]
+    episode = state["next_episode"]
+    chapter = state["current_chapter"] or state["next_chapter"]
+    if phase == "concept":
+        return "create concept"
+    if phase == "foundation":
+        return "create foundation files"
+    if phase == "plotting":
+        return "create plot and chapter plan"
+    if phase == "episode_planning":
+        return f"create episode plan {episode:04d}"
+    if phase == "drafting":
+        plan = Path("episode_plans") / f"{episode:04d}.md"
+        if not _safe_regular_file(root, plan):
+            return f"create episode plan {episode:04d}"
+        return f"draft episode {episode:04d}"
+    if phase == "chapter_revision":
+        return f"review chapter {chapter:04d}"
+    if phase == "final_revision":
+        return "review complete novel"
+    return "report completed project"
+
+
 def inspect_status(root: Path, state: dict[str, Any]) -> StatusSnapshot:
     """状態と主要ファイルを軽く照合し、ファイルを変更せず結果を返す。"""
     warnings: list[StatusWarning] = []
