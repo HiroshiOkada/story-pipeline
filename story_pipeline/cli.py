@@ -11,10 +11,14 @@ import sys
 from story_pipeline import __version__
 from story_pipeline.config import load_config
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.environment import validate_environment
+from story_pipeline.git_validation import validate_git
 from story_pipeline.project import find_project_root
+from story_pipeline.project_validation import validate_project_files
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
 from story_pipeline.status import determine_next_action, inspect_status
+from story_pipeline.validation import IssueCollector
 
 
 EXIT_CONFIG = 4
@@ -65,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _init_project(args.path)
         elif args.command == "status":
             return _show_status()
+        elif args.command == "validate":
+            return _validate_project()
         return 0
     except StoryPipelineError as error:
         return _error(error.reason, error.location, error.action, error.exit_code)
@@ -208,3 +214,24 @@ def _request_label(number: int | None, status: str | None = None) -> str:
 
 def _number_label(number: int | None) -> str:
     return "none" if number is None else f"{number:04d}"
+
+
+def _validate_project() -> int:
+    root = find_project_root()
+    collector = IssueCollector()
+    context = validate_project_files(root, collector)
+    validate_git(root, collector)
+    validate_environment(context.config, collector)
+    for issue in collector.issues:
+        print(issue.format())
+    if collector.error_count:
+        print(
+            f"Validation failed: {collector.error_count} error(s), "
+            f"{collector.warning_count} warning(s)."
+        )
+        return EXIT_CONFIG
+    if collector.warning_count:
+        print(f"Validation passed with {collector.warning_count} warning(s).")
+    else:
+        print("Validation passed.")
+    return 0
