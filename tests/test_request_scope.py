@@ -10,7 +10,7 @@ from story_pipeline.context_builder import build_interpretation_messages, load_c
 from story_pipeline.decision_resolution import resolve_pending_decisions
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.llm_client import CompletionResult
-from story_pipeline.llm_transport import ChatResponse
+from story_pipeline.llm_transport import ApiFailure, ChatResponse
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_planner import plan_selected_request
 from story_pipeline.request_selection import SelectedRequest, select_request
@@ -142,6 +142,8 @@ class RequestScopeTest(unittest.TestCase):
         selected = select_request(self.root, self.state)
 
         class FakeClient:
+            config = {"limits": {"generation_calls": 1}}
+
             def complete_role(self, role: str, messages: list[dict[str, str]], **_: object) -> CompletionResult:
                 self.role = role
                 self.messages = messages
@@ -153,6 +155,52 @@ class RequestScopeTest(unittest.TestCase):
         self.assertEqual(client.role, "planner")
         self.assertEqual(planned.scope.action, "create_concept")
         self.assertEqual(planned.interpretation.kind, "continue")
+        self.assertEqual(planned.logical_calls, 1)
+
+    def test_mock_planner_regenerates_invalid_interpretation(self) -> None:
+        selected = select_request(self.root, self.state)
+
+        class FakeClient:
+            config = {"limits": {"generation_calls": 2}}
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete_role(self, _: str, messages: list[dict[str, str]], **__: object) -> CompletionResult:
+                self.calls += 1
+                value = (
+                    interpretation_value(targets=["concept.md"])
+                    if self.calls == 1
+                    else interpretation_value()
+                )
+                return CompletionResult(ChatResponse(json.dumps(value), "mock", "stop"), "mock", 1, ())
+
+        client = FakeClient()
+        planned = plan_selected_request(self.root, self.state, selected, client)
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(planned.logical_calls, 2)
+
+    def test_mock_planner_regenerates_invalid_api_response(self) -> None:
+        selected = select_request(self.root, self.state)
+
+        class FakeClient:
+            config = {"limits": {"generation_calls": 2}}
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete_role(self, *_: object, **__: object) -> CompletionResult:
+                self.calls += 1
+                if self.calls == 1:
+                    raise ApiFailure("invalid_response", "invalid")
+                return CompletionResult(
+                    ChatResponse(json.dumps(interpretation_value()), "mock", "stop"), "mock", 1, ()
+                )
+
+        client = FakeClient()
+        planned = plan_selected_request(self.root, self.state, selected, client)
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(planned.logical_calls, 2)
 
 
 if __name__ == "__main__":
