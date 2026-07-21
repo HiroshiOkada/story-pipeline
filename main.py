@@ -1,6 +1,5 @@
-def main():
-    print("Hello from story-pipeline!")
+from story_pipeline.cli import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
