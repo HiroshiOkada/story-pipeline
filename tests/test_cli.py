@@ -35,6 +35,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertEqual(stdout.getvalue(), f"story-pipeline {__version__}\n")
 
+    def test_init_rejects_dash_as_usage_error(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised:
+            with contextlib.redirect_stderr(stderr):
+                main(("init", "-"))
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("PATH に '-' は指定できません", stderr.getvalue())
+
     def test_init_creates_scaffold_and_git_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

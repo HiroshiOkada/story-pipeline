@@ -17,6 +17,12 @@ EXIT_GIT = 5
 EXIT_IO = 9
 
 
+def _init_path(value: str) -> str:
+    if value == "-":
+        raise argparse.ArgumentTypeError("PATH に '-' は指定できません")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """CLI の引数パーサーを構築する。"""
     parser = argparse.ArgumentParser(
@@ -33,7 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser(
         "init", help="新しい Story Pipeline プロジェクトを初期化する"
     )
-    init_parser.add_argument("path", nargs="?", default=".", metavar="PATH")
+    init_parser.add_argument(
+        "path", nargs="?", default=".", type=_init_path, metavar="PATH"
+    )
 
     subparsers.add_parser("run", help="次の未処理要求を実行する")
     subparsers.add_parser("status", help="作品の現在状態を表示する")
