@@ -52,7 +52,7 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
             raise _git_error("stage 済み変更があります", path)
         if entry.kind == "untracked" and classify_path(path, dotenv) == "managed":
             raise _git_error("未追跡の CLI 管理ファイルがあります", path)
-    _inspect_index_flags(root, entries, dotenv)
+    _inspect_index_flags(root, dotenv)
     return GitPreflight(tuple(entries), frozenset(dotenv))
 
 
@@ -183,25 +183,29 @@ def _unstage_our_paths(root: Path, paths: set[str]) -> None:
     _git(root, ["restore", "--staged", "--", *sorted(paths)])
 
 
-def _inspect_index_flags(
-    root: Path, entries: list[WorktreeEntry], configured_dotenv: set[str]
-) -> None:
-    protected = {
-        entry.normalized_path()
-        for entry in entries
-        if classify_path(entry.normalized_path(), configured_dotenv) in {"managed", "human"}
-    }
-    result = _git(root, ["ls-files", "-v", "--", *sorted(protected)]) if protected else None
+def _inspect_index_flags(root: Path, configured_dotenv: set[str]) -> None:
+    result = _git(root, ["ls-files", "-v"])
     if result is not None and result.returncode == 0:
         for line in result.stdout.decode("utf-8", errors="surrogateescape").splitlines():
-            if len(line) > 2 and (line[0].islower() or line[0] == "S"):
-                raise _git_error("保護対象パスに特殊な index flag が設定されています", line[2:])
-    stage = _git(root, ["ls-files", "--stage", "--", *sorted(protected)]) if protected else None
+            path = normalize_git_path(line[2:]) if len(line) > 2 else None
+            if (
+                path is not None
+                and classify_path(path, configured_dotenv) in {"managed", "human"}
+                and (line[0].islower() or line[0] == "S")
+            ):
+                raise _git_error("保護対象パスに特殊な index flag が設定されています", path)
+    stage = _git(root, ["ls-files", "--stage"])
     if stage is not None and stage.returncode == 0:
         for line in stage.stdout.decode("utf-8", errors="surrogateescape").splitlines():
             fields = line.split(maxsplit=2)
-            if len(fields) == 3 and fields[1] == "0" * 40:
-                raise _git_error("intent-to-add が設定されています", line.split("\t", 1)[1])
+            path = normalize_git_path(line.split("\t", 1)[1]) if "\t" in line else None
+            if (
+                len(fields) == 3
+                and fields[1] == "0" * 40
+                and path is not None
+                and classify_path(path, configured_dotenv) in {"managed", "human"}
+            ):
+                raise _git_error("intent-to-add が設定されています", path)
 
 
 def _entry_signatures(entries: tuple[WorktreeEntry, ...] | list[WorktreeEntry]) -> dict[str, tuple[str, str, str]]:

@@ -160,6 +160,10 @@ def _read_record(path: Path) -> LockRecord:
             or not record.hostname
             or not isinstance(record.started_at, str)
             or (record.request_number is not None and type(record.request_number) is not int)
+            or (
+                record.request_number is not None
+                and not 0 <= record.request_number <= 9999
+            )
         ):
             raise ValueError
         return record

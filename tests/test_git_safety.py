@@ -62,6 +62,12 @@ class GitSafetyTest(unittest.TestCase):
         with self.assertRaisesRegex(StoryPipelineError, "未追跡"):
             inspect_run_preconditions(self.root, self.config)
 
+    def test_preflight_rejects_index_flag_on_clean_managed_file(self) -> None:
+        self.git("update-index", "--skip-worktree", "concept.md")
+
+        with self.assertRaisesRegex(StoryPipelineError, "index flag"):
+            inspect_run_preconditions(self.root, self.config)
+
     def test_restore_changes_only_tracked_managed_files(self) -> None:
         self.write("concept.md", "direct edit\n")
         self.write("requests/0000.md", "human edit\n")
