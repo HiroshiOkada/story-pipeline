@@ -10,6 +10,7 @@ from story_pipeline.foundation import (
     FOUNDATION_FILES,
     FOUNDATION_HEADINGS,
     build_foundation_context,
+    check_foundation_documents,
     foundation_generation_response_format,
     parse_foundation_candidate,
 )
@@ -81,6 +82,42 @@ class FoundationPhaseTest(unittest.TestCase):
         schema = foundation_generation_response_format()["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(tuple(schema["required"]), FOUNDATION_FILES)
+
+    def test_mechanical_check_normalizes_and_accepts_complete_documents(self) -> None:
+        documents = {
+            path: "```markdown\n"
+            + "\n\n".join(f"{heading}\n内容" for heading in headings)
+            + "\n```"
+            for path, headings in FOUNDATION_HEADINGS.items()
+        }
+        checked = check_foundation_documents(documents)
+        self.assertTrue(checked.accepted)
+        self.assertFalse(checked.content("world.md").startswith("```"))
+
+    def test_mechanical_check_reports_structure_across_documents(self) -> None:
+        documents = {
+            path: "\n\n".join(f"{heading}\n内容" for heading in headings)
+            for path, headings in FOUNDATION_HEADINGS.items()
+        }
+        documents["world.md"] = "説明\n" + documents["world.md"].replace(
+            FOUNDATION_HEADINGS["world.md"][-1], "## 別の節"
+        )
+        documents["style.md"] += "\n<!-- TODO -->\n````\n"
+        checked = check_foundation_documents(documents)
+        codes = {issue.code for issue in checked.issues}
+        self.assertIn("MISSING_HEADING", codes)
+        self.assertIn("UNEXPECTED_PREAMBLE", codes)
+        self.assertIn("TEMPLATE_COMMENT", codes)
+        self.assertIn("FENCE_REMAINS", codes)
+
+    def test_mechanical_check_rejects_provisional_future_plan_in_canon(self) -> None:
+        documents = {
+            path: "\n\n".join(f"{heading}\n内容" for heading in headings)
+            for path, headings in FOUNDATION_HEADINGS.items()
+        }
+        documents["canon.md"] += "\n- 将来案: 主人公は町を去る\n"
+        checked = check_foundation_documents(documents)
+        self.assertIn("PROVISIONAL_CANON", {issue.code for issue in checked.issues})
 
 
 if __name__ == "__main__":

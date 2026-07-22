@@ -6,10 +6,12 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
-from story_pipeline.llm_output import FieldRule, parse_json_object
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.llm_output import FieldRule, parse_json_object, validate_markdown
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -73,6 +75,30 @@ class FoundationContext:
 
     messages: tuple[dict[str, str], ...]
     input_hashes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationMechanicalIssue:
+    """LLM を使わず検出した基礎設定候補の問題。"""
+
+    code: str
+    location: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationMechanicalCheck:
+    """4成果物の安全な正規化結果と採用を妨げる問題。"""
+
+    documents: tuple[tuple[str, str], ...]
+    issues: tuple[FoundationMechanicalIssue, ...]
+
+    @property
+    def accepted(self) -> bool:
+        return not self.issues
+
+    def content(self, path: str) -> str:
+        return dict(self.documents)[path]
 
 
 def build_foundation_context(
@@ -159,6 +185,90 @@ def foundation_generation_response_format() -> dict[str, Any]:
         "type": "json_schema",
         "json_schema": {"name": "foundation_candidate", "strict": True, "schema": schema},
     }
+
+
+def check_foundation_documents(
+    documents: tuple[tuple[str, str], ...] | dict[str, str],
+) -> FoundationMechanicalCheck:
+    """内容を創作せず、基礎設定4成果物を正規化して機械検査する。"""
+    values = dict(documents)
+    issues: list[FoundationMechanicalIssue] = []
+    normalized_documents: list[tuple[str, str]] = []
+    if set(values) != set(FOUNDATION_FILES):
+        for path in FOUNDATION_FILES:
+            if path not in values:
+                issues.append(FoundationMechanicalIssue("MISSING_FILE", path, "必須成果物がありません"))
+        for path in sorted(set(values) - set(FOUNDATION_FILES)):
+            issues.append(FoundationMechanicalIssue("UNKNOWN_FILE", path, "対象外の成果物です"))
+    for path in FOUNDATION_FILES:
+        content = values.get(path, "")
+        try:
+            normalized = validate_markdown(content)
+        except StoryPipelineError as error:
+            normalized_documents.append((path, content if isinstance(content, str) else ""))
+            issues.append(FoundationMechanicalIssue("INVALID_MARKDOWN", path, error.reason))
+            continue
+        normalized_documents.append((path, normalized))
+        issues.extend(_check_document_structure(path, normalized, FOUNDATION_HEADINGS[path]))
+    canon = dict(normalized_documents).get("canon.md", "")
+    for line_number, line in enumerate(canon.splitlines(), start=1):
+        stripped = line.strip()
+        if re.match(
+            r"^(?:#{1,6}\s*|[-*+]\s*|\d+[.)]\s*)?(?:将来案|今後の展開|予定事項|未確定(?:事項)?|候補)\s*[:：]?(?!\s*(?:なし|ありません)\s*$)",
+            stripped,
+        ):
+            issues.append(
+                FoundationMechanicalIssue(
+                    "PROVISIONAL_CANON",
+                    f"canon.md:{line_number}",
+                    "未確定の将来案を canon.md の確定事項として扱っています",
+                )
+            )
+    return FoundationMechanicalCheck(tuple(normalized_documents), tuple(issues))
+
+
+def _check_document_structure(
+    path: str,
+    content: str,
+    headings: tuple[str, ...],
+) -> list[FoundationMechanicalIssue]:
+    issues: list[FoundationMechanicalIssue] = []
+    if any(line.strip().startswith("```") for line in content.splitlines()):
+        issues.append(FoundationMechanicalIssue("FENCE_REMAINS", path, "Markdown fence が本文内に残っています"))
+    if re.search(r"<!--[\s\S]*?-->", content):
+        issues.append(
+            FoundationMechanicalIssue("TEMPLATE_COMMENT", path, "HTML コメントが残っています")
+        )
+    lines = content.splitlines()
+    positions: dict[str, list[int]] = {heading: [] for heading in headings}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in positions:
+            positions[stripped].append(index)
+    for heading in headings:
+        found = positions[heading]
+        if not found:
+            issues.append(FoundationMechanicalIssue("MISSING_HEADING", f"{path} {heading}", "必須見出しがありません"))
+        elif len(found) > 1:
+            issues.append(FoundationMechanicalIssue("DUPLICATE_HEADING", f"{path} {heading}", "必須見出しが重複しています"))
+    all_positions = [position for found in positions.values() for position in found]
+    first = positions[headings[0]]
+    if first and all_positions and first[0] == min(all_positions):
+        preamble = [line.strip() for line in lines[: first[0]] if line.strip()]
+        if preamble and not (len(preamble) == 1 and preamble[0].startswith("# ")):
+            issues.append(FoundationMechanicalIssue("UNEXPECTED_PREAMBLE", path, "最初の必須見出しより前に説明文があります"))
+    if all(len(positions[heading]) == 1 for heading in headings):
+        ordered = [positions[heading][0] for heading in headings]
+        if ordered != sorted(ordered):
+            issues.append(FoundationMechanicalIssue("HEADING_ORDER", path, "必須見出しが指定順ではありません"))
+        else:
+            for index, heading in enumerate(headings):
+                start = ordered[index] + 1
+                end = ordered[index + 1] if index + 1 < len(ordered) else len(lines)
+                body = [line for line in lines[start:end] if line.strip()]
+                if not body or all(line.lstrip().startswith("#") for line in body):
+                    issues.append(FoundationMechanicalIssue("EMPTY_SECTION", f"{path} {heading}", "必須節の本文が空です"))
+    return issues
 
 
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:
