@@ -89,6 +89,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 uv run python -m unittest discover -s tests -p 'test_*.py'
 uv run python -m compileall -q story_pipeline tests
 uv build
+uv run python tests/integration_distribution.py dist/story_pipeline-0.1.0-py3-none-any.whl
 git diff --check
 ```
 
