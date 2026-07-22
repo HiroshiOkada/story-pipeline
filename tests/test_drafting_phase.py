@@ -73,23 +73,23 @@ class DraftingPhaseTest(unittest.TestCase):
 
     def test_candidate_contract_rejects_path_for_another_episode(self) -> None:
         candidate = parse_draft_candidate(
-            json.dumps({"path": "episodes/0002.md", "content": "本文"}),
+            json.dumps({"path": "episodes/0002.md", "title": "題", "body": "本文"}),
             episode_number=2, generation=1, model_reference="mock", input_hashes=(),
         )
         self.assertEqual(candidate.path, "episodes/0002.md")
         with self.assertRaises(StoryPipelineError):
             parse_draft_candidate(
-                json.dumps({"path": "episodes/0003.md", "content": "本文"}),
+                json.dumps({"path": "episodes/0003.md", "title": "題", "body": "本文"}),
                 episode_number=2, generation=1, model_reference="mock", input_hashes=(),
             )
 
     def test_generation_prompt_and_schema_pin_headings_target_and_length(self) -> None:
         context = build_drafting_context(self.root, self.request, self.interpretation, 2)
-        for heading in EPISODE_HEADINGS:
-            self.assertIn(heading, context.messages[0]["content"])
+        self.assertIn("path、title、body", context.messages[0]["content"])
         self.assertIn("100字", context.messages[-1]["content"])
         schema = draft_generation_response_format(2)["json_schema"]["schema"]
         self.assertEqual(schema["properties"]["path"]["const"], "episodes/0002.md")
+        self.assertEqual(set(schema["required"]), {"path", "title", "body"})
         self.assertFalse(schema["additionalProperties"])
 
     def test_request_length_tolerance_overrides_style_and_default(self) -> None:
@@ -105,10 +105,7 @@ class DraftingPhaseTest(unittest.TestCase):
 
     def test_mechanical_check_accepts_normalized_body_within_length(self) -> None:
         content = "```markdown\n## 話タイトル\n潮風\n\n## 本文\n" + "海" * 100 + "\n```"
-        candidate = parse_draft_candidate(
-            json.dumps({"path": "episodes/0002.md", "content": content}),
-            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
-        )
+        candidate = DraftCandidate("episodes/0002.md", content, 2, 1, "mock", ())
         checked = check_draft_candidate(candidate, 100)
         self.assertTrue(checked.accepted)
         self.assertEqual(checked.character_count, 100)
@@ -117,10 +114,7 @@ class DraftingPhaseTest(unittest.TestCase):
 
     def test_mechanical_check_reports_structure_json_and_length_warning(self) -> None:
         content = "説明\n\n## 本文\n{}\n\n## 話タイトル\n題\n\n## 説明\n不要"
-        candidate = parse_draft_candidate(
-            json.dumps({"path": "episodes/0002.md", "content": content}),
-            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
-        )
+        candidate = DraftCandidate("episodes/0002.md", content, 2, 1, "mock", ())
         checked = check_draft_candidate(candidate, 100)
         codes = {issue.code for issue in checked.issues}
         self.assertFalse(checked.accepted)

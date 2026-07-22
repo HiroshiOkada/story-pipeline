@@ -18,7 +18,7 @@ from story_pipeline.state import load_state
 def draft_payload(label: str) -> str:
     return json.dumps({
         "path": "episodes/0001.md",
-        "content": f"## 話タイトル\n潮風\n\n## 本文\n{label}" + "海" * 92 + "。\n",
+        "title": "潮風", "body": label + "海" * 92 + "。",
     }, ensure_ascii=False)
 
 
@@ -101,12 +101,12 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertFalse((self.root / "episodes" / "0001.md").exists())
         self.assertEqual(result.checkpoint_path, ".story-pipeline/checkpoints/0000/draft.json")
         self.assertTrue((self.root / result.checkpoint_path).is_file())
-        self.assertIn("MISSING_HEADING", {item.code for item in result.diagnostics})
+        self.assertIn("DRAFT_JSON_INVALID", {item.code for item in result.diagnostics})
         self.assertNotIn("不完全", " ".join(item.reason for item in result.diagnostics))
         retry = client.messages[1][-1]["content"]
-        self.assertIn("見出しを翻訳・短縮・言い換えせず", retry)
+        self.assertIn("path、title、body", retry)
         schema = client.options[0]["response_format"]["json_schema"]["schema"]
-        self.assertIn("## 話タイトル", schema["properties"]["content"]["pattern"])
+        self.assertEqual(set(schema["required"]), {"path", "title", "body"})
 
     def test_mock_workflow_returns_awaiting_human_without_knowledge_call(self) -> None:
         client = FakeClient([draft_payload("判断候補"), evaluation("awaiting_human", 3)])

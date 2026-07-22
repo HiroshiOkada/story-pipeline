@@ -52,7 +52,7 @@ def evaluation(decision: str) -> str:
 def draft() -> str:
     return json.dumps({
         "path": "episodes/0001.md",
-        "content": "## 話タイトル\n潮風\n\n## 本文\n二人は古い看板を直し始めた。" + "海" * 72 + "。\n",
+        "title": "潮風", "body": "二人は古い看板を直し始めた。" + "海" * 72 + "。",
     }, ensure_ascii=False)
 
 

@@ -271,6 +271,7 @@ def _generate_valid_candidate(
                 "content": (
                     "前回候補は出力契約に違反しました。応答を推測修復せず、"
                     f"次を直した対象話本文の JSON object 全体を再生成してください: {error.reason}"
+                    + _exact_draft_content_instruction()
                 ),
             })
             continue
@@ -301,9 +302,8 @@ def _generate_valid_candidate(
 
 def _exact_draft_content_instruction() -> str:
     return (
-        " content は先頭から『## 話タイトル』、タイトル1行、空行、"
-        "『## 本文』、小説本文の順とします。この2つの見出しを"
-        "翻訳・短縮・言い換えせず、他の ## 見出しを使わないでください。"
+        " title は見出しや改行のない話タイトルだけ、body は見出しのない"
+        "小説本文だけとして、path、title、body の JSON object 全体を返してください。"
     )
 
 

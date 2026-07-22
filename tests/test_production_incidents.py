@@ -47,7 +47,7 @@ def _draft_payload() -> str:
     return json.dumps(
         {
             "path": "episodes/0001.md",
-            "content": "## 話タイトル\n潮風\n\n## 本文\n" + "海" * 100 + "\n",
+            "title": "潮風", "body": "海" * 100,
         },
         ensure_ascii=False,
     )
