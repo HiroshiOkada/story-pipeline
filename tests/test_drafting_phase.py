@@ -8,13 +8,18 @@ import unittest
 
 from story_pipeline.drafting import (
     DEFAULT_DRAFTING_CONTEXT,
+    DraftCandidate,
     EPISODE_HEADINGS,
+    EvaluatedDraftCandidate,
+    build_draft_revision_messages,
     build_drafting_context,
     check_draft_candidate,
     draft_generation_response_format,
     draft_evaluation_response_format,
     parse_draft_candidate,
     parse_draft_evaluation,
+    run_draft_revision_loop,
+    select_best_draft,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -133,6 +138,50 @@ class DraftingPhaseTest(unittest.TestCase):
             {"request_fit", "consistency", "plan_fit", "episode_completion", "style_fit", "readability"},
         )
         self.assertFalse(schema["additionalProperties"])
+
+    def test_revision_loop_preserves_target_and_stops_on_accept(self) -> None:
+        context = build_drafting_context(self.root, self.request, self.interpretation, 2)
+        scores = {
+            "request_fit": 5, "consistency": 5, "plan_fit": 5,
+            "episode_completion": 5, "style_fit": 5, "readability": 5,
+        }
+        revise_evaluation = parse_draft_evaluation(json.dumps(
+            {"decision": "revise", "summary": "改稿", "issues": [], "scores": scores}
+        ))
+        accepted = parse_draft_evaluation(json.dumps(
+            {"decision": "accept", "summary": "採用", "issues": [], "scores": scores}
+        ))
+        initial = EvaluatedDraftCandidate(
+            DraftCandidate("episodes/0002.md", "初稿", 2, 1, "writer", context.input_hashes),
+            revise_evaluation,
+        )
+
+        def revise(candidate, evaluation, revision_count):
+            messages = build_draft_revision_messages(context, candidate, evaluation)
+            self.assertIn("BEGIN DRAFT CANDIDATE", messages[-3]["content"])
+            return DraftCandidate(
+                candidate.path, "改稿", 2, 2, "reviser", context.input_hashes, revision_count
+            )
+
+        records = run_draft_revision_loop(initial, 3, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertIs(select_best_draft(records), records[-1])
+
+    def test_best_draft_prefers_required_scores_then_fewer_revisions(self) -> None:
+        scores = {
+            "request_fit": 5, "consistency": 5, "plan_fit": 5,
+            "episode_completion": 5, "style_fit": 5, "readability": 5,
+        }
+        evaluation = parse_draft_evaluation(json.dumps(
+            {"decision": "accept", "summary": "採用", "issues": [], "scores": scores}
+        ))
+        first = EvaluatedDraftCandidate(
+            DraftCandidate("episodes/0002.md", "A", 2, 1, "writer", ()), evaluation
+        )
+        revised = EvaluatedDraftCandidate(
+            DraftCandidate("episodes/0002.md", "B", 2, 2, "reviser", (), 1), evaluation
+        )
+        self.assertIs(select_best_draft([revised, first]), first)
 
 
 if __name__ == "__main__":
