@@ -193,6 +193,8 @@ def finalize_run_record(
         raise ValueError("実行の終了 status が不正です")
     if status == "failed" and (not resume_step or not resume_reason):
         raise ValueError("failed には再開位置と理由が必要です")
+    if any(step["status"] == "running" for step in run["steps"]):
+        raise ValueError("running の工程を残したまま実行を終了できません")
     timestamp = now or utc_timestamp()
     updated = deepcopy(run)
     updated["status"] = status
