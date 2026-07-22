@@ -7,8 +7,11 @@ import tempfile
 import unittest
 
 from story_pipeline.chapter_revision import (
+    CHAPTER_SCORE_NAMES,
     DEFAULT_CHAPTER_REVISION_CONTEXT,
     build_chapter_revision_context,
+    chapter_evaluation_response_format,
+    parse_chapter_evaluation,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -62,7 +65,35 @@ class ChapterRevisionContextTest(unittest.TestCase):
         with self.assertRaises(StoryPipelineError):
             build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
 
+    def test_evaluation_requires_completion_and_all_quality_scores(self) -> None:
+        payload = {
+            "decision": "accept", "complete": True, "reason": "章として完結した",
+            "summary": "採用可能", "issues": [],
+            "scores": {name: 5 for name in CHAPTER_SCORE_NAMES}, "human_decision": None,
+        }
+        self.assertTrue(parse_chapter_evaluation(json.dumps(payload, ensure_ascii=False)).adoptable)
+        del payload["scores"]["timeline"]
+        with self.assertRaises(StoryPipelineError):
+            parse_chapter_evaluation(json.dumps(payload, ensure_ascii=False))
+
+    def test_awaiting_human_requires_structured_decision(self) -> None:
+        payload = {
+            "decision": "awaiting_human", "complete": False, "reason": "再構成が必要",
+            "summary": "章順の変更が必要", "issues": [],
+            "scores": {name: 3 for name in CHAPTER_SCORE_NAMES},
+            "human_decision": {"question": "章を再構成しますか", "reason": "三話へ波及するため", "choices": ["維持", "再構成"]},
+        }
+        evaluation = parse_chapter_evaluation(json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(evaluation.human_decision.choices, ("維持", "再構成"))
+        payload["human_decision"] = None
+        with self.assertRaises(StoryPipelineError):
+            parse_chapter_evaluation(json.dumps(payload, ensure_ascii=False))
+
+    def test_schema_pins_all_chapter_quality_scores(self) -> None:
+        schema = chapter_evaluation_response_format()["json_schema"]["schema"]
+        self.assertEqual(set(schema["properties"]["scores"]["required"]), set(CHAPTER_SCORE_NAMES))
+        self.assertFalse(schema["additionalProperties"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

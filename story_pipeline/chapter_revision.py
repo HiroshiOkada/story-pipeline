@@ -35,6 +35,50 @@ class ChapterRevisionContext:
     input_hashes: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ChapterRevisionIssue:
+    severity: str
+    category: str
+    location: str
+    evidence: str
+    instruction: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChapterDecision:
+    question: str
+    reason: str
+    choices: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ChapterEvaluation:
+    decision: str
+    complete: bool
+    reason: str
+    summary: str
+    issues: tuple[ChapterRevisionIssue, ...]
+    scores: tuple[tuple[str, int], ...]
+    human_decision: ChapterDecision | None
+
+    @property
+    def has_error(self) -> bool:
+        return any(issue.severity == "error" for issue in self.issues)
+
+    @property
+    def adoptable(self) -> bool:
+        return self.decision == "accept" and self.complete and not self.has_error
+
+    def score(self, name: str) -> int:
+        return dict(self.scores)[name]
+
+
+CHAPTER_SCORE_NAMES = (
+    "request_fit", "pacing", "repetition", "cast_balance", "timeline",
+    "viewpoint", "foreshadowing", "character_arc",
+)
+
+
 def build_chapter_revision_context(
     root: Path,
     request: SelectedRequest,
@@ -104,6 +148,95 @@ def build_chapter_revision_context(
     )
 
 
+def parse_chapter_evaluation(content: str) -> ChapterEvaluation:
+    """章評価、完成判定、人間判断事項を厳格に検証する。"""
+    value = parse_json_object(content, {
+        "decision": FieldRule((str,), frozenset({"accept", "revise", "awaiting_human"})),
+        "complete": FieldRule((bool,)), "reason": FieldRule((str,)),
+        "summary": FieldRule((str,)), "issues": FieldRule((list,)),
+        "scores": FieldRule((dict,)), "human_decision": FieldRule((dict, type(None))),
+    })
+    evaluation_data = json.dumps({
+        key: value[key] for key in ("decision", "complete", "reason", "summary", "issues", "scores")
+    }, ensure_ascii=False)
+    checked = validate_evaluation(evaluation_data, completion=True)
+    missing = set(CHAPTER_SCORE_NAMES) - checked["scores"].keys()
+    if missing:
+        raise _format_error(f"章評価に必須 score がありません: {sorted(missing)[0]}")
+    if set(checked["scores"]) != set(CHAPTER_SCORE_NAMES):
+        raise _format_error("章評価の scores に未知の項目があります")
+    issues = tuple(ChapterRevisionIssue(
+        item["severity"], item["category"], item["location"],
+        item["evidence"], item["instruction"],
+    ) for item in checked["issues"])
+    human_decision = _parse_human_decision(value["human_decision"])
+    if value["decision"] == "awaiting_human" and human_decision is None:
+        raise _format_error("awaiting_human には human_decision が必要です")
+    if value["decision"] != "awaiting_human" and human_decision is not None:
+        raise _format_error("human_decision は awaiting_human の場合だけ指定できます")
+    if value["complete"] and value["decision"] != "accept":
+        raise _format_error("complete=true には decision=accept が必要です")
+    if value["complete"] and any(issue.severity == "error" for issue in issues):
+        raise _format_error("error がある章を complete=true にできません")
+    return ChapterEvaluation(
+        value["decision"], value["complete"], value["reason"], value["summary"],
+        issues, tuple(sorted(value["scores"].items())), human_decision,
+    )
+
+
+def chapter_evaluation_response_format() -> dict[str, Any]:
+    """章 reviewer 用の厳格な JSON Schema。"""
+    issue = {
+        "type": "object", "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            **{name: {"type": "string"} for name in ("category", "location", "evidence", "instruction")},
+        },
+    }
+    human_decision = {
+        "type": "object", "additionalProperties": False,
+        "required": ["question", "reason", "choices"],
+        "properties": {
+            "question": {"type": "string"}, "reason": {"type": "string"},
+            "choices": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+        },
+    }
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["decision", "complete", "reason", "summary", "issues", "scores", "human_decision"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["accept", "revise", "awaiting_human"]},
+            "complete": {"type": "boolean"}, "reason": {"type": "string"},
+            "summary": {"type": "string"}, "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object", "additionalProperties": False,
+                "required": list(CHAPTER_SCORE_NAMES),
+                "properties": {name: {"type": "integer", "minimum": 1, "maximum": 5} for name in CHAPTER_SCORE_NAMES},
+            },
+            "human_decision": {"anyOf": [human_decision, {"type": "null"}]},
+        },
+    }
+    return {"type": "json_schema", "json_schema": {"name": "chapter_evaluation", "strict": True, "schema": schema}}
+
+
+def _parse_human_decision(value: Any) -> ChapterDecision | None:
+    if value is None:
+        return None
+    if set(value) != {"question", "reason", "choices"}:
+        raise _format_error("human_decision のキーが出力契約と一致しません")
+    if not isinstance(value["question"], str) or not isinstance(value["reason"], str):
+        raise _format_error("human_decision の question と reason は文字列である必要があります")
+    choices = value["choices"]
+    if not isinstance(choices, list) or len(choices) < 2 or any(not isinstance(item, str) or not item for item in choices):
+        raise _format_error("human_decision の choices は2件以上の文字列である必要があります")
+    return ChapterDecision(value["question"], value["reason"], tuple(choices))
+
+
+def _format_error(reason: str) -> StoryPipelineError:
+    return StoryPipelineError(reason, "LLM response", "応答を修正指示付きで再生成してください", 7)
+
+
 def _chapter_episode_numbers(content: str, path: str) -> tuple[int, ...]:
     match = re.search(r"(?ms)^## 収録話\s*$\n(.*?)(?=^## |\Z)", content)
     if match is None:
@@ -138,4 +271,3 @@ def _review_system_prompt() -> str:
         "テンポ、反復、出番、時系列、視点、伏線、人物変化、長さの観点で評価します。"
         "現在要求と採用済み資料を優先し、応答は指定された JSON object だけにします。"
     )
-
