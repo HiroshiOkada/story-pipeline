@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -170,6 +171,52 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(state["active_request"], 0)
         self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
 
+    def test_unchanged_failed_run_resume_keeps_single_revision(self) -> None:
+        self._create_failed_run()
+
+        self._resume_successfully()
+
+        run = self._run_record()
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["resume_count"], 1)
+        self.assertEqual(len(run["request_revisions"]), 1)
+
+    def test_uncommitted_request_revision_is_committed_and_recorded(self) -> None:
+        self._create_failed_run()
+        initial = self._run_record()
+        revised = "# 要求\n\n短編の舞台を港町にしてください。\n"
+        (self.root / "requests/0000.md").write_text(revised, encoding="utf-8")
+
+        self._resume_successfully()
+
+        run = self._run_record()
+        revisions = run["request_revisions"]
+        self.assertEqual(run["request_sha256"], hashlib.sha256(revised.encode()).hexdigest())
+        self.assertEqual(len(revisions), 2)
+        self.assertEqual(revisions[0]["input_commit"], run["start_commit"])
+        self.assertEqual(
+            revisions[1]["input_commit"],
+            self.git("rev-parse", "HEAD~1").stdout.decode().strip(),
+        )
+        self.assertEqual(revisions[1]["applies_from_step"], "interpret_request")
+        subjects = self.git("log", "-3", "--format=%s").stdout.decode().splitlines()
+        self.assertIn("Record request 0000 input", subjects)
+
+    def test_committed_request_revision_uses_existing_head_boundary(self) -> None:
+        self._create_failed_run()
+        revised = "# 要求\n\n短編の舞台を山村にしてください。\n"
+        (self.root / "requests/0000.md").write_text(revised, encoding="utf-8")
+        self.git("add", "requests/0000.md")
+        self.git("commit", "-q", "-m", "Revise request")
+        revision_commit = self.git("rev-parse", "HEAD").stdout.decode().strip()
+
+        self._resume_successfully()
+
+        run = self._run_record()
+        self.assertEqual(run["request_revisions"][-1]["input_commit"], revision_commit)
+        subjects = self.git("log", "-3", "--format=%s").stdout.decode().splitlines()
+        self.assertEqual(subjects.count("Record request 0000 input"), 0)
+
     def test_i08_unexpected_workflow_error_becomes_generic_exit_9(self) -> None:
         class BrokenClient(FakeClient):
             def complete_role(self, *_: object, **__: object) -> CompletionResult:
@@ -210,6 +257,19 @@ class RunCommandIntegrationTest(unittest.TestCase):
     def _config(self) -> dict[str, object]:
         from story_pipeline.config import load_config
         return load_config(self.root)
+
+    def _create_failed_run(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), "invalid", "invalid", "invalid"])
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            self.assertEqual(run_command(output=io.StringIO(), error_output=io.StringIO()), 7)
+
+    def _resume_successfully(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            self.assertEqual(run_command(output=io.StringIO(), error_output=io.StringIO()), 0)
+
+    def _run_record(self) -> dict[str, object]:
+        return json.loads((self.root / ".story-pipeline/runs/0000.json").read_text())
 
     def git(self, *arguments: str) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
