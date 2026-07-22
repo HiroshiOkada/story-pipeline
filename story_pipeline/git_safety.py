@@ -33,6 +33,8 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
     entries = read_worktree(root)
     for entry in entries:
         path = entry.normalized_path()
+        if entry.kind == "ignored":
+            continue
         if entry.kind == "unmerged":
             raise _git_error("競合を解消する必要があります", path)
         if entry.index_status not in {".", "?"}:
