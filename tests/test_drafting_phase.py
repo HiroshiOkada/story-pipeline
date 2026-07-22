@@ -10,6 +10,7 @@ from story_pipeline.drafting import (
     DEFAULT_DRAFTING_CONTEXT,
     EPISODE_HEADINGS,
     build_drafting_context,
+    check_draft_candidate,
     draft_generation_response_format,
     parse_draft_candidate,
 )
@@ -79,6 +80,31 @@ class DraftingPhaseTest(unittest.TestCase):
         schema = draft_generation_response_format(2)["json_schema"]["schema"]
         self.assertEqual(schema["properties"]["path"]["const"], "episodes/0002.md")
         self.assertFalse(schema["additionalProperties"])
+
+    def test_mechanical_check_accepts_normalized_body_within_length(self) -> None:
+        content = "```markdown\n## 話タイトル\n潮風\n\n## 本文\n" + "海" * 100 + "\n```"
+        candidate = parse_draft_candidate(
+            json.dumps({"path": "episodes/0002.md", "content": content}),
+            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+        )
+        checked = check_draft_candidate(candidate, 100)
+        self.assertTrue(checked.accepted)
+        self.assertEqual(checked.character_count, 100)
+        self.assertEqual(checked.issues, ())
+        self.assertFalse(checked.content.startswith("```"))
+
+    def test_mechanical_check_reports_structure_json_and_length_warning(self) -> None:
+        content = "説明\n\n## 本文\n{}\n\n## 話タイトル\n題\n\n## 説明\n不要"
+        candidate = parse_draft_candidate(
+            json.dumps({"path": "episodes/0002.md", "content": content}),
+            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+        )
+        checked = check_draft_candidate(candidate, 100)
+        codes = {issue.code for issue in checked.issues}
+        self.assertFalse(checked.accepted)
+        self.assertIn("HEADING_ORDER", codes)
+        self.assertIn("UNKNOWN_HEADING", codes)
+        self.assertIn("LENGTH_OUT_OF_RANGE", codes)
 
 
 if __name__ == "__main__":

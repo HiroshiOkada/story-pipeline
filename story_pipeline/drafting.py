@@ -233,6 +233,105 @@ def draft_generation_response_format(episode_number: int) -> dict[str, Any]:
     }
 
 
+def check_draft_candidate(
+    candidate: DraftCandidate,
+    target_length: int,
+    *,
+    tolerance: float = 0.20,
+) -> DraftMechanicalCheck:
+    """本文を正規化し、固定構造と目標文字数からの偏差を決定的に検査する。"""
+    if target_length <= 0:
+        raise ValueError("target_length は正の整数である必要があります")
+    if not 0 <= tolerance < 1:
+        raise ValueError("tolerance は0以上1未満である必要があります")
+    path = f"episodes/{candidate.episode_number:04d}.md"
+    issues: list[DraftMechanicalIssue] = []
+    try:
+        normalized = validate_markdown(candidate.content)
+    except StoryPipelineError as error:
+        issues.append(DraftMechanicalIssue("error", "INVALID_MARKDOWN", path, error.reason))
+        return DraftMechanicalCheck(path, candidate.content, 0, target_length, tuple(issues))
+    if any(line.strip().startswith("```") for line in normalized.splitlines()):
+        issues.append(DraftMechanicalIssue(
+            "error", "FENCE_REMAINS", path, "Markdown fence が本文内に残っています"
+        ))
+    if re.search(r"<!--[\s\S]*?-->", normalized):
+        issues.append(DraftMechanicalIssue(
+            "error", "TEMPLATE_COMMENT", path, "HTML コメントが残っています"
+        ))
+    lines = normalized.splitlines()
+    positions: dict[str, list[int]] = {heading: [] for heading in EPISODE_HEADINGS}
+    unknown_h2: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in positions:
+            positions[stripped].append(index)
+        elif stripped.startswith("## "):
+            unknown_h2.append((index, stripped))
+    for heading in EPISODE_HEADINGS:
+        found = positions[heading]
+        if not found:
+            issues.append(DraftMechanicalIssue(
+                "error", "MISSING_HEADING", f"{path} {heading}", "必須見出しがありません"
+            ))
+        elif len(found) > 1:
+            issues.append(DraftMechanicalIssue(
+                "error", "DUPLICATE_HEADING", f"{path} {heading}", "必須見出しが重複しています"
+            ))
+    for _, heading in unknown_h2:
+        issues.append(DraftMechanicalIssue(
+            "error", "UNKNOWN_HEADING", f"{path} {heading}", "本文成果物に未知の第2レベル見出しがあります"
+        ))
+    all_positions = [position for found in positions.values() for position in found]
+    first = positions[EPISODE_HEADINGS[0]]
+    if first and all_positions and first[0] == min(all_positions):
+        preamble = [line.strip() for line in lines[: first[0]] if line.strip()]
+        if preamble:
+            issues.append(DraftMechanicalIssue(
+                "error", "UNEXPECTED_PREAMBLE", path, "最初の必須見出しより前に説明文があります"
+            ))
+    if all(len(positions[heading]) == 1 for heading in EPISODE_HEADINGS):
+        ordered = [positions[heading][0] for heading in EPISODE_HEADINGS]
+        if ordered != sorted(ordered):
+            issues.append(DraftMechanicalIssue(
+                "error", "HEADING_ORDER", path, "必須見出しが指定順ではありません"
+            ))
+        else:
+            for index, heading in enumerate(EPISODE_HEADINGS):
+                start = ordered[index] + 1
+                end = ordered[index + 1] if index + 1 < len(ordered) else len(lines)
+                body_lines = [line for line in lines[start:end] if line.strip()]
+                if not body_lines or all(line.lstrip().startswith("#") for line in body_lines):
+                    issues.append(DraftMechanicalIssue(
+                        "error", "EMPTY_SECTION", f"{path} {heading}", "必須節の本文が空です"
+                    ))
+    body = _section_body(normalized, "## 本文")
+    character_count = len(body.replace("\r", "").replace("\n", ""))
+    lower = int(target_length * (1 - tolerance))
+    upper = int(target_length * (1 + tolerance))
+    if character_count < lower or character_count > upper:
+        issues.append(DraftMechanicalIssue(
+            "warning", "LENGTH_OUT_OF_RANGE", f"{path} ## 本文",
+            f"本文{character_count}字が目標{target_length}字の許容範囲{lower}〜{upper}字外です",
+        ))
+    if _looks_like_json_body(body):
+        issues.append(DraftMechanicalIssue(
+            "error", "JSON_IN_BODY", f"{path} ## 本文", "小説本文ではなく JSON 応答が混入しています"
+        ))
+    return DraftMechanicalCheck(path, normalized, character_count, target_length, tuple(issues))
+
+
+def _looks_like_json_body(body: str) -> bool:
+    stripped = body.strip()
+    if not stripped or stripped[0] not in "[{":
+        return False
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
 def _safe_file(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
