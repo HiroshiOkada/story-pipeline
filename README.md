@@ -70,7 +70,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 
 | コマンド | 動作 |
 | --- | --- |
-| `story-pipeline init [PATH]` | 空のディレクトリに作品プロジェクトを作成します。 |
+| `story-pipeline init [PATH]` | 空のディレクトリに作品プロジェクトと検証済み初期 commit を作成します。 |
 | `story-pipeline status` | 現在のフェーズと次の標準処理を副作用なしで表示します。 |
 | `story-pipeline validate` | 設定、状態、成果物、Git の整合性を API 呼び出しなしで検査します。 |
 | `story-pipeline run` | 最若番号の未処理要求を1件処理します。 |
@@ -78,6 +78,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 ## 安全な運用
 
 - `run` は Git 作業ツリー、実行ロック、設定、認証情報、API 接続を確認してから作品を変更します。
+- `init` は scaffold の既知4ファイルだけを `Initialize story project` として commit し、作業ツリーを clean にします。
 - 人間が編集した要求と設定を開始時コミットに、採用済み成果物と実行記録を終了時コミットに保存します。
 - staged 変更、競合、Git の履歴操作中、想定外の変更がある場合は自動処理を開始しません。
 - `.env` と `.story-pipeline/run.lock` は初期化時から Git の除外対象です。API キーを設定、報告、コミットへ記録しないでください。

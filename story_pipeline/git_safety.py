@@ -18,6 +18,7 @@ from story_pipeline.git_validation import (
     normalize_git_path,
 )
 from story_pipeline.validation import IssueCollector
+from story_pipeline.scaffold import SCAFFOLD_FILE_PATHS
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,18 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
             raise _git_error("未追跡の CLI 管理ファイルがあります", path)
     _inspect_index_flags(root, dotenv)
     return GitPreflight(tuple(entries), frozenset(dotenv))
+
+
+def inspect_initial_repository(root: Path) -> None:
+    """既存の空 repository を変更せず初期化前提を検査する。"""
+    validate_run_repository(root)
+    entries = read_worktree(root)
+    if entries:
+        raise _git_error(
+            "初期化前の Git repository に差分があります",
+            entries[0].normalized_path(),
+        )
+    _inspect_index_flags(root, set())
 
 
 def validate_run_repository(root: Path) -> None:
@@ -121,6 +134,18 @@ def commit_start_inputs(
     )
 
 
+def commit_initial_scaffold(root: Path) -> str:
+    """検証済み scaffold の既知ファイルだけを初期 commit に保存する。"""
+    commit = commit_explicit_paths(
+        root,
+        SCAFFOLD_FILE_PATHS,
+        "Initialize story project",
+    )
+    if commit is None:
+        raise _git_error("初期 commit の対象がありません", root)
+    return commit
+
+
 def commit_run_outputs(
     root: Path,
     request_number: int,
@@ -194,6 +219,9 @@ def _staged_paths(root: Path) -> set[str]:
 
 
 def _unstage_our_paths(root: Path, paths: set[str]) -> None:
+    if _git_text(root, ["rev-parse", "--verify", "HEAD"]) is None:
+        _git(root, ["rm", "--cached", "-q", "--ignore-unmatch", "--", *sorted(paths)])
+        return
     _git(root, ["restore", "--staged", "--", *sorted(paths)])
 
 

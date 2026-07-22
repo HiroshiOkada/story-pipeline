@@ -63,6 +63,13 @@ INITIAL_REQUEST_TEMPLATE = """# 作品作成要求
 
 GITIGNORE_TEMPLATE = ".env\n.story-pipeline/run.lock\n"
 
+SCAFFOLD_FILE_PATHS = (
+    ".gitignore",
+    ".story-pipeline/state.json",
+    "requests/0000.md",
+    "story-pipeline-config.jsonc",
+)
+
 
 def _state_template() -> str:
     now = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -93,18 +100,20 @@ def create_scaffold(root: Path) -> None:
         root / ".story-pipeline",
         root / ".story-pipeline" / "runs",
     )
-    files = (
-        (root / "story-pipeline-config.jsonc", CONFIG_TEMPLATE),
-        (root / "requests" / "0000.md", INITIAL_REQUEST_TEMPLATE),
-        (root / ".story-pipeline" / "state.json", _state_template()),
-        (root / ".gitignore", GITIGNORE_TEMPLATE),
-    )
+    contents = {
+        "story-pipeline-config.jsonc": CONFIG_TEMPLATE,
+        "requests/0000.md": INITIAL_REQUEST_TEMPLATE,
+        ".story-pipeline/state.json": _state_template(),
+        ".gitignore": GITIGNORE_TEMPLATE,
+    }
     created: list[Path] = []
     try:
         for directory in directories:
             directory.mkdir()
             created.append(directory)
-        for path, content in files:
+        for relative in SCAFFOLD_FILE_PATHS:
+            path = root / relative
+            content = contents[relative]
             path.write_text(content, encoding="utf-8", newline="\n")
             created.append(path)
     except BaseException:

@@ -84,6 +84,24 @@ class RequestScopeTest(unittest.TestCase):
         with self.assertRaises(StoryPipelineError):
             parse_request_interpretation(json.dumps(value), source)
 
+    def test_standard_targets_are_normalized_but_mixed_explicit_targets_are_kept(self) -> None:
+        for kind in ("create", "continue", "answer"):
+            parsed = parse_request_interpretation(
+                json.dumps(interpretation_value(kind=kind, targets=["concept.md"])),
+                "短編を書いてください。",
+            )
+            self.assertEqual(parsed.targets, ())
+        parsed = parse_request_interpretation(
+            json.dumps(interpretation_value(kind="mixed", targets=["concept.md"])),
+            "`concept.md` を修正した後に続きを書いてください。",
+        )
+        self.assertEqual(parsed.targets, ("concept.md",))
+
+    def test_explicit_target_must_be_a_safe_path_from_request(self) -> None:
+        value = interpretation_value(kind="modify", targets=["../concept.md"])
+        with self.assertRaisesRegex(StoryPipelineError, "安全な作品ルート相対"):
+            parse_request_interpretation(json.dumps(value), "`../concept.md` を修正")
+
     def test_decision_answers_must_exactly_match_pending_choices(self) -> None:
         self.state["pending_decisions"] = [
             {
@@ -157,7 +175,7 @@ class RequestScopeTest(unittest.TestCase):
         self.assertEqual(planned.interpretation.kind, "continue")
         self.assertEqual(planned.logical_calls, 1)
 
-    def test_mock_planner_regenerates_invalid_interpretation(self) -> None:
+    def test_mock_planner_accepts_normalized_standard_target_without_regeneration(self) -> None:
         selected = select_request(self.root, self.state)
 
         class FakeClient:
@@ -168,17 +186,15 @@ class RequestScopeTest(unittest.TestCase):
 
             def complete_role(self, _: str, messages: list[dict[str, str]], **__: object) -> CompletionResult:
                 self.calls += 1
-                value = (
-                    interpretation_value(targets=["concept.md"])
-                    if self.calls == 1
-                    else interpretation_value()
-                )
+                value = interpretation_value(targets=["concept.md"])
                 return CompletionResult(ChatResponse(json.dumps(value), "mock", "stop"), "mock", 1, ())
 
         client = FakeClient()
         planned = plan_selected_request(self.root, self.state, selected, client)
-        self.assertEqual(client.calls, 2)
-        self.assertEqual(planned.logical_calls, 2)
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(planned.logical_calls, 1)
+        self.assertEqual(planned.interpretation.targets, ())
+        self.assertEqual(planned.scope.targets, ("concept.md",))
 
     def test_mock_planner_regenerates_invalid_api_response(self) -> None:
         selected = select_request(self.root, self.state)

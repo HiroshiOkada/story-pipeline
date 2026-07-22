@@ -11,6 +11,7 @@ from story_pipeline.llm_output import FieldRule, parse_json_object
 
 
 REQUEST_KINDS = frozenset({"create", "continue", "modify", "add", "reconsider", "answer", "mixed"})
+EXPLICIT_TARGET_KINDS = frozenset({"modify", "add", "reconsider"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,16 +50,24 @@ def parse_request_interpretation(content: str, request_source: str) -> RequestIn
     }
     value = parse_json_object(content, rules)
     summary = _nonempty_string(value["summary"], "summary")
-    targets = _string_list(value["targets"], "targets")
+    supplied_targets = _string_list(value["targets"], "targets")
     required = _string_list(value["required_conditions"], "required_conditions")
     prohibited = _string_list(value["prohibited_changes"], "prohibited_changes")
     materials = _string_list(value["additional_material"], "additional_material")
     ambiguities = _string_list(value["ambiguities"], "ambiguities")
-    for index, target in enumerate(targets):
-        if target not in request_source:
-            raise _interpretation_error(
-                f"要求本文に明示されていない対象です: targets/{index}"
-            )
+    explicit_targets = value["kind"] in EXPLICIT_TARGET_KINDS or (
+        value["kind"] == "mixed" and bool(supplied_targets)
+    )
+    if explicit_targets:
+        for index, target in enumerate(supplied_targets):
+            _relative_path(target, f"targets/{index}")
+            if target not in request_source:
+                raise _interpretation_error(
+                    f"要求本文に明示されていない対象です: targets/{index}"
+                )
+        targets = supplied_targets
+    else:
+        targets = ()
     for index, material in enumerate(materials):
         _relative_path(material, f"additional_material/{index}")
         if material not in request_source:
