@@ -133,7 +133,7 @@ class ValidateCommandTest(unittest.TestCase):
             state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
             (root / "requests" / "0000_agent.md").write_text("# report\n", encoding="utf-8")
             runs = root / ".story-pipeline" / "runs"
-            runs.mkdir()
+            runs.mkdir(exist_ok=True)
             run = self.completed_run(request_hash)
             (runs / "0000.json").write_text(json.dumps(run, indent=2) + "\n", encoding="utf-8")
             self.git(

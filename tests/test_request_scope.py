@@ -47,7 +47,7 @@ class RequestScopeTest(unittest.TestCase):
         self.state = load_state(self.root)
 
     def test_selects_youngest_unprocessed_request_and_resume_first(self) -> None:
-        (self.root / ".story-pipeline" / "runs").mkdir()
+        (self.root / ".story-pipeline" / "runs").mkdir(exist_ok=True)
         (self.root / ".story-pipeline" / "runs" / "0000.json").write_text("{}\n")
         (self.root / "requests" / "0001.md").write_text("続きを書いてください。\n")
         selected = select_request(self.root, self.state)

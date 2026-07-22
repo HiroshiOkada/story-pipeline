@@ -53,7 +53,7 @@ class StatusCommandTest(unittest.TestCase):
             state_path.write_text(json.dumps(state), encoding="utf-8")
             (root / "requests" / "0000_agent.md").write_text("# report\n", encoding="utf-8")
             runs = root / ".story-pipeline" / "runs"
-            runs.mkdir()
+            runs.mkdir(exist_ok=True)
             (runs / "0000.json").write_text(
                 json.dumps({"status": "completed"}), encoding="utf-8"
             )
