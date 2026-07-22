@@ -77,7 +77,7 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "request_number": 0,
   "status": "running",
   "started_at": "2026-07-22T01:23:45Z",
@@ -100,11 +100,22 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
   "restored_files": [],
   "fallbacks": [],
   "errors": [],
-  "resume": null
+  "resume": null,
+  "request_revisions": [
+    {
+      "sha256": "...",
+      "input_commit": "...",
+      "accepted_at": "2026-07-22T01:23:45Z",
+      "applies_from_step": "interpret_request"
+    }
+  ],
+  "resume_count": 0
 }
 ```
 
-`request_sha256`、`input_hashes`、`output_hashes` はファイルの生バイト列に対する小文字 64 桁の SHA-256 とする。Git コミットは完全な object ID を保存する。
+`request_sha256`、`input_hashes`、`output_hashes` はファイルの生バイト列に対する小文字 64 桁の SHA-256 とする。Git コミットは完全な object ID を保存する。`request_sha256` は現在受け入れている要求を表し、`request_revisions` は初回から最新版までの hash、入力 commit、受入時刻、再実行を始める工程を順に保存する。`start_commit` と `started_at` は初回値から変更しない。`resume_count` はプロセス単位の再開ごとに増やす。
+
+version 1 の run は、`request_sha256`、`start_commit`、`started_at` から初回 revision を補い、`resume_count=0` の version 2 として読み込む。次に run を永続化すると version 2 へ移行する。
 
 ### 3.2 工程
 
@@ -128,7 +139,7 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
 
 ### 3.3 モデル試行とエラー
 
-`model_attempts` は論理呼び出しごとに role、モデル定義名、API 上のモデル名、開始・終了日時、結果分類、消費トークン数が取得できた場合の値を記録する。プロンプト、応答全文、API キー、認証ヘッダーは記録しない。
+`model_attempts` は論理呼び出しごとに role、モデル定義名、API 上のモデル名、開始・終了日時、結果分類、消費トークン数が取得できた場合の値、および適用された要求 revision の 0 始まり番号を記録する。プロンプト、応答全文、API キー、認証ヘッダーは記録しない。
 
 エラー要素は次の形式とする。
 
@@ -171,12 +182,12 @@ awaiting_human -> pending（後続の回答要求）
 `run` は未処理要求の探索前に `state.active_request` を確認する。非 `null` の場合は次をすべて満たすときだけ再開する。
 
 1. 対応する要求、実行記録、開始時コミットが存在する。
-2. 要求ファイルのハッシュが `request_sha256` と一致する。
+2. 要求ファイルのハッシュが `request_sha256` と一致するか、安全な要求改訂として開始時入力 commit に保存できる。
 3. 完了済み工程の出力ファイルが存在し、記録済みハッシュと一致する。
 4. 現在の設定が読み込み可能である。
 5. 自動作成済みの後続要求が空またはテンプレートのままであり、再開対象とは別の新規要求が混入していない。
 
-1 つでも満たさなければ自動変更せず、`validate` の実行と人間による解決を案内する。
+要求が変わっている場合は、未コミットなら要求と許可された設定だけを開始時入力 commit に保存し、commit 済みなら現在の HEAD を入力境界とする。新しい revision を追加して `request_sha256` を更新し、`interpret_request` から依存工程を再実行する。自動作成された後続要求が実質空でない場合は改訂か新規要求かが曖昧なため停止し、active 要求へ内容を移すか active run の扱いを決めるよう案内する。その他の条件を満たさなければ自動変更せず、`validate` の実行と人間による解決を案内する。
 
 `pending_decisions` がある場合は active request の再開ではなく、最若番号の未処理要求を回答要求として解釈する。必要な判断 ID への回答が含まれなければ `8` で停止し、その要求をコミットまたは処理しない。
 
@@ -184,7 +195,7 @@ awaiting_human -> pending（後続の回答要求）
 
 `resume` は `{"step": "draft_episode_0004", "reason": "api_timeout"}` の形式とする。再開時は完了済み工程をスキップし、最初の未完了工程から行う。ただし、工程入力のハッシュが変わった場合は、その入力に依存する工程を未完了へ戻す。採用済み作品ファイルは再生成しない。
 
-LLM 呼び出し回数は要求単位の累積値を保持し、プロセス再起動でリセットしない。通信試行の一時的な回数だけは論理呼び出しの再開時にリセットできる。
+LLM 呼び出し回数は要求単位の累積値を保持し、プロセス再起動でリセットしない。各モデル試行は要求 revision 番号と対応付ける。通信試行の一時的な回数だけは論理呼び出しの再開時にリセットできる。
 
 ### 5.3 プロセス中断
 

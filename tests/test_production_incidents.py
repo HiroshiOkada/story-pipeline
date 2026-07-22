@@ -117,7 +117,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
 
         self.assertEqual(interpretation.targets, ())
 
-    def test_i03_resume_keeps_obsolete_request_hash(self) -> None:
+    def test_i03_resume_records_revised_request_hash(self) -> None:
         original_hash = hashlib.sha256("最初の要求".encode()).hexdigest()
         changed_hash = hashlib.sha256("修正した要求".encode()).hexdigest()
         run = create_run_record(0, original_hash, "a" * 40)
@@ -125,10 +125,18 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             run, "failed", resume_step="generate", resume_reason="再試行"
         )
 
-        resumed = resume_run_record(failed, step="generate", reason="再試行")
+        resumed = resume_run_record(
+            failed,
+            step="interpret_request",
+            reason="要求改訂を受け入れて再解釈",
+            request_sha256=changed_hash,
+            input_commit="b" * 40,
+        )
 
-        self.assertEqual(resumed["request_sha256"], original_hash)
-        self.assertNotEqual(resumed["request_sha256"], changed_hash)
+        self.assertEqual(resumed["request_sha256"], changed_hash)
+        self.assertEqual(resumed["request_revisions"][0]["sha256"], original_hash)
+        self.assertEqual(resumed["request_revisions"][1]["sha256"], changed_hash)
+        self.assertEqual(resumed["start_commit"], "a" * 40)
 
     def test_i05_validated_draft_is_not_saved_when_knowledge_extraction_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

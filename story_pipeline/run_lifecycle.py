@@ -32,7 +32,7 @@ def create_run_record(
     _require_commit(start_commit)
     timestamp = now or utc_timestamp()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "request_number": request_number,
         "status": "running",
         "started_at": timestamp,
@@ -56,6 +56,15 @@ def create_run_record(
         "fallbacks": [],
         "errors": [],
         "resume": None,
+        "request_revisions": [
+            {
+                "sha256": request_sha256,
+                "input_commit": start_commit,
+                "accepted_at": timestamp,
+                "applies_from_step": "interpret_request",
+            }
+        ],
+        "resume_count": 0,
     }
 
 
@@ -64,17 +73,45 @@ def resume_run_record(
     *,
     step: str,
     reason: str,
+    request_sha256: str | None = None,
+    input_commit: str | None = None,
+    applies_from_step: str = "interpret_request",
     now: str | None = None,
 ) -> dict[str, Any]:
     """failed 記録を running に戻し、最初の開始時刻と累積値を保つ。"""
     if run.get("status") != "failed":
         raise ValueError("failed の実行記録だけを再開できます")
     updated = deepcopy(run)
+    if updated.get("schema_version") == 1:
+        updated["schema_version"] = 2
+        updated["request_revisions"] = [{
+            "sha256": updated["request_sha256"],
+            "input_commit": updated["start_commit"],
+            "accepted_at": updated["started_at"],
+            "applies_from_step": "interpret_request",
+        }]
+        updated["resume_count"] = 0
+    timestamp = now or utc_timestamp()
+    if request_sha256 is not None and request_sha256 != updated["request_sha256"]:
+        _require_hash(request_sha256)
+        if input_commit is None:
+            raise ValueError("要求改訂には入力 commit が必要です")
+        _require_commit(input_commit)
+        if not applies_from_step:
+            raise ValueError("要求改訂には適用開始工程が必要です")
+        updated["request_sha256"] = request_sha256
+        updated["request_revisions"].append({
+            "sha256": request_sha256,
+            "input_commit": input_commit,
+            "accepted_at": timestamp,
+            "applies_from_step": applies_from_step,
+        })
     updated["status"] = "running"
     updated["finished_at"] = None
-    updated["updated_at"] = now or utc_timestamp()
+    updated["updated_at"] = timestamp
     updated["current_step"] = step
     updated["resume"] = {"step": step, "reason": reason}
+    updated["resume_count"] += 1
     return updated
 
 
@@ -171,6 +208,7 @@ def record_model_attempt(
             "result": result,
             "attempts": attempts,
             "token_count": token_count,
+            "request_revision": len(updated["request_revisions"]) - 1,
         }
     )
     updated["fallbacks"].extend(deepcopy(list(fallbacks)))

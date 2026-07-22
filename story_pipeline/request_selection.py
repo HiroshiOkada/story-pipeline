@@ -36,6 +36,7 @@ def select_request(root: Path, state: dict[str, Any]) -> SelectedRequest | None:
                 f".story-pipeline/runs/{active:04d}.json",
                 4,
             )
+        _reject_meaningful_followup(root, active)
         return _load_selected(root, active, "resume")
 
     requests = root / "requests"
@@ -78,6 +79,38 @@ def has_meaningful_request_content(content: str) -> bool:
         if not MARKDOWN_ONLY.fullmatch(line):
             return True
     return False
+
+
+def _reject_meaningful_followup(root: Path, active: int) -> None:
+    """active run と意味のある後続要求が同時に存在する曖昧な状態を拒否する。"""
+    directory = root / "requests"
+    if not _directory_without_symlink(directory):
+        raise _selection_error("要求ディレクトリが安全な通常ディレクトリではありません", "requests", 4)
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError as error:
+        raise _selection_error("要求ディレクトリを読み取れません", "requests", 4) from error
+    for entry in entries:
+        match = REQUEST_FILE.fullmatch(entry.name)
+        if match is None or int(match.group(1)) <= active:
+            continue
+        relative = f"requests/{entry.name}"
+        if not _regular_file_without_symlink(entry):
+            raise _selection_error("後続要求が安全な通常ファイルではありません", relative, 4)
+        try:
+            content = entry.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise _selection_error("後続要求を UTF-8 で読み取れません", relative, 4) from error
+        if has_meaningful_request_content(content):
+            raise _selection_error(
+                "failed run の再開中に具体的な後続要求があります",
+                relative,
+                8,
+                (
+                    f"再開中の改訂なら内容を requests/{active:04d}.md へ移し、"
+                    "新規要求なら active run の扱いを決めてから再実行してください"
+                ),
+            )
 
 
 def _load_selected(
