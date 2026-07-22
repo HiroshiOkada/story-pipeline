@@ -98,6 +98,14 @@ class ConceptPhaseTest(unittest.TestCase):
         self.assertIn("MISSING_HEADING", codes)
         self.assertIn("DUPLICATE_HEADING", codes)
 
+    def test_mechanical_check_rejects_explanation_and_internal_fence(self) -> None:
+        body = "\n\n".join(f"{heading}\n内容" for heading in CONCEPT_HEADINGS)
+        checked = check_concept_markdown("以下が構想です。\n" + body + "\n```\n補足\n```\n")
+        self.assertEqual(
+            {issue.code for issue in checked.issues},
+            {"UNEXPECTED_PREAMBLE", "FENCE_REMAINS"},
+        )
+
     def test_evaluation_requires_comparison_scores_and_derives_adoptability(self) -> None:
         value = {
             "decision": "accept",

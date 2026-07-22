@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 
 from story_pipeline.concept import (
     ConceptCandidate,
