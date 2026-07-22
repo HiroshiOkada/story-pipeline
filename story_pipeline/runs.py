@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import math
 import re
 from typing import Any
 
@@ -175,7 +176,8 @@ def _empty_metrics() -> dict[str, Any]:
         "retry_wait_ms": 0,
         "elapsed_ms": 0,
         "usage": {key: None for key in (
-            "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"
+            "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+            "cost_usd",
         )},
     }
 
@@ -238,7 +240,10 @@ def _validate_observability(run: dict[str, Any], location: str) -> None:
         if _bounded_integer(metrics[key], f"{location}#/metrics/{key}", 0, 2**63 - 1) != value:
             _fail("詳細記録と集計値が一致しません", f"{location}#/metrics/{key}")
     _validate_usage(metrics["usage"], f"{location}#/metrics/usage")
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"):
+    for key in (
+        "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+        "cost_usd",
+    ):
         values = [item["usage"][key] for item in calls if item["usage"] is not None and item["usage"][key] is not None]
         expected_usage = sum(values) if values else None
         if metrics["usage"][key] != expected_usage:
@@ -264,10 +269,20 @@ def _validate_usage(value: Any, location: str) -> None:
     if value is None:
         return
     usage = _object(value, location)
-    keys = {"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"}
+    keys = {
+        "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+        "cost_usd",
+    }
     _keys(usage, keys, location)
     for key in keys:
-        if usage[key] is not None:
+        if usage[key] is not None and key == "cost_usd":
+            number = usage[key]
+            if (
+                not isinstance(number, (int, float)) or isinstance(number, bool)
+                or not math.isfinite(float(number)) or number < 0
+            ):
+                _fail("非負の有限数である必要があります", f"{location}/{key}")
+        elif usage[key] is not None:
             _bounded_integer(usage[key], f"{location}/{key}", 0, 2**63 - 1)
 
 

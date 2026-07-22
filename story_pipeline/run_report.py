@@ -145,6 +145,7 @@ def _performance_lines(run: dict[str, Any], metrics: dict[str, Any]) -> list[str
         for name in (
             "prompt_tokens", "completion_tokens", "total_tokens",
             "cached_tokens", "reasoning_tokens",
+            "cost_usd",
         )
     )
     fallbacks = sum(item.get("fallback_count", 0) for item in run.get("model_calls", ()))

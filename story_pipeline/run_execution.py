@@ -243,6 +243,7 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
                 "total_tokens": completion.response.usage.total_tokens,
                 "cached_tokens": completion.response.usage.cached_tokens,
                 "reasoning_tokens": completion.response.usage.reasoning_tokens,
+                "cost_usd": completion.response.usage.cost_usd,
             }
             if completion.response.usage is not None else None
         ),

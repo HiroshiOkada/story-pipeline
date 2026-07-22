@@ -388,6 +388,7 @@ def _empty_metrics() -> dict[str, Any]:
             "total_tokens": None,
             "cached_tokens": None,
             "reasoning_tokens": None,
+            "cost_usd": None,
         },
     }
 

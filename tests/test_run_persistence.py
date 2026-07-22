@@ -115,13 +115,14 @@ class RunLifecycleTests(unittest.TestCase):
             ),
             usage={
                 "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
-                "cached_tokens": None, "reasoning_tokens": 5,
+                "cached_tokens": None, "reasoning_tokens": 5, "cost_usd": 0.0025,
             },
         )
 
         self.assertEqual(run["metrics"]["transport_attempts"], 2)
         self.assertEqual(run["metrics"]["retry_wait_ms"], 500)
         self.assertEqual(run["metrics"]["usage"]["total_tokens"], 30)
+        self.assertEqual(run["metrics"]["usage"]["cost_usd"], 0.0025)
         self.assertEqual(validate_run_data(run, 0), run)
         run["metrics"]["usage"]["total_tokens"] = 31
         with self.assertRaises(ValueError):
@@ -312,6 +313,7 @@ class ReportingAndNextRequestTests(unittest.TestCase):
         )
 
         self.assertIn("total_tokens=unknown", report)
+        self.assertIn("cost_usd=unknown", report)
         self.assertIn("再開後 knowledge 再生成: 0", report)
         self.assertIn("retry_wait_ms=0", report)
 
