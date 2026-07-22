@@ -21,7 +21,7 @@
 ## 統合テスト
 
 - 開発中の重要な段階では統合テストを実施する。
-- 統合テストで LLM API を使用する場合は、ベース URL に `https://openrouter.ai/api/v1`、API キーの環境変数に `OPENROUTER_APIKEY`、モデルに `deepseek/deepseek-v4-flash` を使用する。
+- 統合テストで LLM API を使用する場合は、ベース URL に `https://openrouter.ai/api/v1`、API キーの環境変数に `OPENROUTER_APIKEY`、モデルに `deepseek/deepseek-v4-flash:nitro` を使用する。
 - `OPENROUTER_APIKEY` は `~/.env` から読み込む。秘密値そのものをリポジトリへ記録しない。
 
 ## 言語
