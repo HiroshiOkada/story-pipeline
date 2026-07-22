@@ -48,9 +48,13 @@ class FakeClient:
     def __init__(self, responses: list[str]) -> None:
         self.responses = iter(responses)
         self.roles: list[str] = []
+        self.messages: list[list[dict[str, str]]] = []
+        self.options: list[dict[str, object]] = []
 
-    def complete_role(self, role: str, messages: list[dict[str, str]], **_: object) -> CompletionResult:
+    def complete_role(self, role: str, messages: list[dict[str, str]], **options: object) -> CompletionResult:
         self.roles.append(role)
+        self.messages.append(messages)
+        self.options.append(options)
         return CompletionResult(
             ChatResponse(next(self.responses), "mock", "stop"), f"mock-{role}", 1, ()
         )
@@ -99,6 +103,10 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertTrue((self.root / result.checkpoint_path).is_file())
         self.assertIn("MISSING_HEADING", {item.code for item in result.diagnostics})
         self.assertNotIn("不完全", " ".join(item.reason for item in result.diagnostics))
+        retry = client.messages[1][-1]["content"]
+        self.assertIn("見出しを翻訳・短縮・言い換えせず", retry)
+        schema = client.options[0]["response_format"]["json_schema"]["schema"]
+        self.assertIn("## 話タイトル", schema["properties"]["content"]["pattern"])
 
     def test_mock_workflow_returns_awaiting_human_without_knowledge_call(self) -> None:
         client = FakeClient([draft_payload("判断候補"), evaluation("awaiting_human", 3)])

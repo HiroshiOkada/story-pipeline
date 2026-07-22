@@ -245,7 +245,10 @@ def _generate_valid_candidate(
             ))
             messages.append({
                 "role": "user",
-                "content": "前回は有効な応答本文がありませんでした。対象話本文の JSON object 全体を再生成してください。",
+                "content": (
+                    "前回は有効な応答本文がありませんでした。対象話本文の JSON object 全体を再生成してください。"
+                    + _exact_draft_content_instruction()
+                ),
             })
             continue
         calls.append(DraftingCall(role, purpose, completion))
@@ -290,9 +293,18 @@ def _generate_valid_candidate(
             "content": (
                 "前回候補は機械検査に失敗しました。前回内容へ継ぎ足さず、"
                 f"次を直した対象話本文の JSON object 全体を再生成してください: {issue_text}"
+                + _exact_draft_content_instruction()
             ),
         })
     return None
+
+
+def _exact_draft_content_instruction() -> str:
+    return (
+        " content は先頭から『## 話タイトル』、タイトル1行、空行、"
+        "『## 本文』、小説本文の順とします。この2つの見出しを"
+        "翻訳・短縮・言い換えせず、他の ## 見出しを使わないでください。"
+    )
 
 
 def _review_candidate(
