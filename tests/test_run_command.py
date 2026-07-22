@@ -48,6 +48,36 @@ def evaluation(decision: str) -> str:
     }, ensure_ascii=False)
 
 
+def draft() -> str:
+    return json.dumps({
+        "path": "episodes/0001.md",
+        "content": "## 話タイトル\n潮風\n\n## 本文\n二人は古い看板を直し始めた。" + "海" * 72 + "。\n",
+    }, ensure_ascii=False)
+
+
+def draft_evaluation() -> str:
+    return json.dumps({
+        "decision": "accept", "summary": "採用可能", "issues": [],
+        "scores": {
+            "request_fit": 5, "consistency": 5, "plan_fit": 5,
+            "episode_completion": 5, "style_fit": 5, "readability": 5,
+        },
+    }, ensure_ascii=False)
+
+
+def draft_knowledge() -> str:
+    return json.dumps({
+        "canon_facts": [{
+            "fact": "二人が看板を直し始めた", "evidence": "二人は古い看板を直し始めた。",
+            "source": "episodes/0001.md", "established_at": "第1話", "people": ["二人"],
+        }],
+        "character_states": [{
+            "character": "二人", "state": "共同作業中", "evidence": "二人は古い看板を直し始めた。",
+            "source": "episodes/0001.md", "established_at": "第1話",
+        }],
+    }, ensure_ascii=False)
+
+
 class FakeClient:
     def __init__(self, config: dict[str, object], responses: list[str], *, probe_error: ApiFailure | None = None) -> None:
         self.config = config
@@ -170,6 +200,46 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(run["resume"]["step"], "generate")
         self.assertEqual(state["active_request"], 0)
         self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
+
+    def test_drafting_adopts_episode_canon_characters_and_checkpoint_together(self) -> None:
+        state_path = self.root / ".story-pipeline/state.json"
+        state = json.loads(state_path.read_text())
+        state["phase"] = "drafting"
+        state["current_chapter"] = 1
+        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        documents = {
+            "concept.md": "# 構想\n",
+            "world.md": "# 世界\n",
+            "characters.md": "## 人物一覧\n二人\n\n## 人物別の目的・変化・口調・状態\n開始前\n",
+            "plot.md": "# 構成\n",
+            "style.md": "# 文体\n",
+            "canon.md": "## 確定事実\n開始前\n\n## 人物状態\n開始前\n",
+            "chapters/0001.md": "# 第1章\n\n## 収録話\n0001\n",
+            "episode_plans/0001.md": "# 第1話\n\n## 目標文字数\n100字\n",
+        }
+        for relative, content in documents.items():
+            (self.root / relative).write_text(content, encoding="utf-8")
+        self.git("add", ".story-pipeline/state.json", "requests/0000.md", *documents)
+        self.git("commit", "-q", "-m", "Prepare drafting fixture")
+        fake = FakeClient(
+            self._config(), [interpretation(), draft(), draft_evaluation(), draft_knowledge()]
+        )
+
+        output = io.StringIO()
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=output, error_output=errors)
+
+        self.assertEqual(code, 0, errors.getvalue())
+        self.assertTrue((self.root / "episodes/0001.md").is_file())
+        self.assertIn("二人が看板を直し始めた", (self.root / "canon.md").read_text())
+        self.assertIn("共同作業中", (self.root / "characters.md").read_text())
+        checkpoint = json.loads(
+            (self.root / ".story-pipeline/checkpoints/0000/draft.json").read_text()
+        )
+        self.assertEqual(checkpoint["adoption"]["status"], "adopted")
+        run = self._run_record()
+        self.assertEqual(run["call_counts"]["knowledge"], 1)
 
     def test_unchanged_failed_run_resume_keeps_single_revision(self) -> None:
         self._create_failed_run()

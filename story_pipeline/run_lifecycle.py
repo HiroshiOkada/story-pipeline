@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 RunStatus = Literal["completed", "failed", "awaiting_human"]
 StepStatus = Literal["completed", "failed", "skipped"]
-CALL_CATEGORIES = {"generation", "review", "revision", "summary"}
+CALL_CATEGORIES = {"generation", "review", "revision", "knowledge", "summary"}
 
 
 def utc_timestamp() -> str:
@@ -47,6 +47,7 @@ def create_run_record(
             "generation": 0,
             "review": 0,
             "revision": 0,
+            "knowledge": 0,
             "summary": 0,
         },
         "model_attempts": [],
@@ -82,6 +83,7 @@ def resume_run_record(
     if run.get("status") != "failed":
         raise ValueError("failed の実行記録だけを再開できます")
     updated = deepcopy(run)
+    updated["call_counts"].setdefault("knowledge", 0)
     if updated.get("schema_version") == 1:
         updated["schema_version"] = 2
         updated["request_revisions"] = [{

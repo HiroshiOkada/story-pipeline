@@ -7,6 +7,16 @@ import hashlib
 import json
 from pathlib import Path
 
+from story_pipeline.draft_checkpoint import (
+    checkpoint_knowledge,
+    checkpoint_relative_path,
+    complete_checkpoint_knowledge,
+    create_pending_checkpoint,
+    load_draft_checkpoint,
+    reusable_checkpoint,
+    write_draft_checkpoint,
+)
+
 from story_pipeline.drafting import (
     DEFAULT_DRAFTING_CONTEXT,
     DraftCandidate,
@@ -42,6 +52,15 @@ class DraftingCall:
 
 
 @dataclass(frozen=True, slots=True)
+class DraftingDiagnostic:
+    boundary: str
+    code: str
+    attempt: int
+    candidate_hash: str | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class DraftingWorkflowResult:
     status: str
     context: DraftingContext
@@ -51,6 +70,8 @@ class DraftingWorkflowResult:
     calls: tuple[DraftingCall, ...]
     call_counts: tuple[tuple[str, int], ...]
     reason: str | None
+    checkpoint_path: str | None = None
+    diagnostics: tuple[DraftingDiagnostic, ...] = ()
 
 
 def produce_draft(
@@ -61,32 +82,57 @@ def produce_draft(
     client: LLMClient,
     *,
     context_paths: list[str] | tuple[str, ...] = DEFAULT_DRAFTING_CONTEXT,
+    request_revision: int = 0,
 ) -> DraftingWorkflowResult:
     """上限内で対象話を生成・再評価し、採用本文の知識更新候補を返す。"""
     context = build_drafting_context(
         root, request, interpretation, episode_number, context_paths=context_paths
     )
     calls: list[DraftingCall] = []
+    diagnostics: list[DraftingDiagnostic] = []
     counts = {"generation": 0, "review": 0, "revision": 0}
     review_limit = client.config["limits"]["review_calls"]
     if review_limit < 2:
         return _result(
             "failed", context, (), calls, counts,
             "本文評価と canon 更新検証には review_calls が2回以上必要です",
+            diagnostics=diagnostics,
         )
-    generated = _generate_valid_candidate(
-        client, "writer", "generation", list(context.messages),
-        client.config["limits"]["generation_calls"], 1, 0, context, calls, counts,
+    checkpoint = load_draft_checkpoint(root, request.number)
+    reused = None if checkpoint is None else reusable_checkpoint(
+        checkpoint,
+        request_revision=request_revision,
+        target_path=f"episodes/{episode_number:04d}.md",
+        input_hashes=dict(context.input_hashes),
     )
-    if generated is None:
-        return _result("failed", context, (), calls, counts, "有効な本文候補を生成できませんでした")
-    evaluation = _review_candidate(
-        client, context, generated.candidate, generated.check,
-        review_limit - 1 - counts["review"], calls, counts,
-    )
-    if evaluation is None:
-        return _result("failed", context, (), calls, counts, "本文候補を有効な形式で評価できませんでした")
-    records = [EvaluatedDraftCandidate(generated.candidate, evaluation)]
+    if reused is not None:
+        records = [reused]
+        best = reused
+        diagnostics.append(DraftingDiagnostic(
+            "checkpoint", "CHECKPOINT_REUSED", 0,
+            _candidate_hash(best.candidate), "入力と候補 hash が一致する本文を再利用",
+        ))
+    else:
+        generated = _generate_valid_candidate(
+            client, "writer", "generation", list(context.messages),
+            client.config["limits"]["generation_calls"], 1, 0, context, calls, counts,
+            diagnostics,
+        )
+        if generated is None:
+            return _result(
+                "failed", context, (), calls, counts, "有効な本文候補を生成できませんでした",
+                diagnostics=diagnostics,
+            )
+        evaluation = _review_candidate(
+            client, context, generated.candidate, generated.check,
+            review_limit - 1 - counts["review"], calls, counts, diagnostics,
+        )
+        if evaluation is None:
+            return _result(
+                "failed", context, (), calls, counts, "本文候補を有効な形式で評価できませんでした",
+                diagnostics=diagnostics,
+            )
+        records = [EvaluatedDraftCandidate(generated.candidate, evaluation)]
     while (
         not records[-1].evaluation.adoptable
         and records[-1].evaluation.decision != "awaiting_human"
@@ -99,34 +145,68 @@ def produce_draft(
             list(build_draft_revision_messages(context, current.candidate, current.evaluation)),
             client.config["limits"]["revision_calls"] - counts["revision"],
             len(records) + 1, counts["revision"] + 1, context, calls, counts,
+            diagnostics,
         )
         if revised is None:
             break
         revised_evaluation = _review_candidate(
             client, context, revised.candidate, revised.check,
             review_limit - 1 - counts["review"], calls, counts,
+            diagnostics,
         )
         if revised_evaluation is None:
             break
         records.append(EvaluatedDraftCandidate(revised.candidate, revised_evaluation))
     best = select_best_draft(records)
     if best is not None:
+        if reused is None:
+            evaluation_model = next(
+                (item.completion.model_reference for item in reversed(calls) if item.purpose == "review"),
+                "unknown",
+            )
+            checkpoint = create_pending_checkpoint(
+                request.number,
+                request_revision,
+                context,
+                best,
+                evaluation_model_reference=evaluation_model,
+            )
+            write_draft_checkpoint(root, checkpoint)
+        assert checkpoint is not None
+        saved_update = checkpoint_knowledge(checkpoint)
+        if saved_update is not None:
+            return _result(
+                "completed", context, tuple(records), calls, counts, None, best, saved_update,
+                checkpoint_relative_path(request.number), diagnostics,
+            )
         update = _extract_knowledge(
-            client, context, best.candidate, review_limit - counts["review"], calls, counts
+            client, context, best.candidate, review_limit - counts["review"], calls, counts,
+            diagnostics,
         )
         if update is None:
             return _result(
                 "failed", context, tuple(records), calls, counts,
                 "採用本文から canon・人物状態更新候補を有効な形式で検証できませんでした",
                 best=best,
+                checkpoint_path=checkpoint_relative_path(request.number),
+                diagnostics=diagnostics,
             )
-        return _result("completed", context, tuple(records), calls, counts, None, best, update)
+        checkpoint = complete_checkpoint_knowledge(checkpoint, update)
+        write_draft_checkpoint(root, checkpoint)
+        return _result(
+            "completed", context, tuple(records), calls, counts, None, best, update,
+            checkpoint_relative_path(request.number), diagnostics,
+        )
     if records[-1].evaluation.decision == "awaiting_human":
         reason = records[-1].evaluation.summary or "本文の確定に人間の判断が必要です"
-        return _result("awaiting_human", context, tuple(records), calls, counts, reason)
+        return _result(
+            "awaiting_human", context, tuple(records), calls, counts, reason,
+            diagnostics=diagnostics,
+        )
     return _result(
         "failed", context, tuple(records), calls, counts,
         "呼び出し上限内に採用可能な本文候補を得られませんでした",
+        diagnostics=diagnostics,
     )
 
 
@@ -147,8 +227,9 @@ def _generate_valid_candidate(
     context: DraftingContext,
     calls: list[DraftingCall],
     counts: dict[str, int],
+    diagnostics: list[DraftingDiagnostic],
 ) -> _CheckedCandidate | None:
-    for _ in range(maximum_calls):
+    for attempt in range(1, maximum_calls + 1):
         counts[purpose] += 1
         try:
             completion = client.complete_role(
@@ -158,6 +239,10 @@ def _generate_valid_candidate(
         except ApiFailure as error:
             if error.kind != "invalid_response":
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "draft_json", f"TRANSPORT_{error.kind.upper()}", attempt, None,
+                "有効な応答本文がありません",
+            ))
             messages.append({
                 "role": "user",
                 "content": "前回は有効な応答本文がありませんでした。対象話本文の JSON object 全体を再生成してください。",
@@ -174,6 +259,10 @@ def _generate_valid_candidate(
         except StoryPipelineError as error:
             if error.exit_code != 7:
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "draft_json", "DRAFT_JSON_INVALID", attempt,
+                _response_hash(completion.response.content), error.reason,
+            ))
             messages.append({
                 "role": "user",
                 "content": (
@@ -193,6 +282,9 @@ def _generate_valid_candidate(
             return _CheckedCandidate(normalized, checked)
         errors = [issue for issue in checked.issues if issue.severity == "error"]
         issue_text = "、".join(f"{item.code}: {item.location}" for item in errors)
+        diagnostics.extend(DraftingDiagnostic(
+            "mechanical", item.code, attempt, _candidate_hash(candidate), item.message
+        ) for item in errors)
         messages.append({
             "role": "user",
             "content": (
@@ -211,9 +303,10 @@ def _review_candidate(
     maximum_calls: int,
     calls: list[DraftingCall],
     counts: dict[str, int],
+    diagnostics: list[DraftingDiagnostic],
 ) -> DraftEvaluation | None:
     messages = _review_messages(context, candidate, mechanical)
-    for _ in range(maximum_calls):
+    for attempt in range(1, maximum_calls + 1):
         counts["review"] += 1
         try:
             completion = client.complete_role(
@@ -222,6 +315,10 @@ def _review_candidate(
         except ApiFailure as error:
             if error.kind != "invalid_response":
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "evaluation", f"TRANSPORT_{error.kind.upper()}", attempt,
+                _candidate_hash(candidate), "有効な評価応答がありません",
+            ))
             messages.append({
                 "role": "user", "content": "前回は有効な応答本文がありませんでした。評価 JSON object 全体を再生成してください。"
             })
@@ -232,6 +329,10 @@ def _review_candidate(
         except StoryPipelineError as error:
             if error.exit_code != 7:
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "evaluation", "EVALUATION_INVALID", attempt,
+                _candidate_hash(candidate), error.reason,
+            ))
             messages.append({
                 "role": "user",
                 "content": (
@@ -292,9 +393,10 @@ def _extract_knowledge(
     maximum_calls: int,
     calls: list[DraftingCall],
     counts: dict[str, int],
+    diagnostics: list[DraftingDiagnostic],
 ) -> DraftKnowledgeUpdate | None:
     messages = list(build_draft_knowledge_messages(context, candidate))
-    for _ in range(maximum_calls):
+    for attempt in range(1, maximum_calls + 1):
         counts["review"] += 1
         try:
             completion = client.complete_role(
@@ -304,6 +406,10 @@ def _extract_knowledge(
         except ApiFailure as error:
             if error.kind != "invalid_response":
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "knowledge", f"TRANSPORT_{error.kind.upper()}", attempt,
+                _candidate_hash(candidate), "有効な knowledge 応答がありません",
+            ))
             messages.append({
                 "role": "user", "content": "前回は有効な応答本文がありませんでした。更新 JSON object 全体を再生成してください。"
             })
@@ -314,6 +420,10 @@ def _extract_knowledge(
         except StoryPipelineError as error:
             if error.exit_code != 7:
                 raise
+            diagnostics.append(DraftingDiagnostic(
+                "knowledge", "KNOWLEDGE_INVALID", attempt,
+                _candidate_hash(candidate), error.reason,
+            ))
             messages.append({
                 "role": "user",
                 "content": (
@@ -333,8 +443,18 @@ def _result(
     reason: str | None,
     best: EvaluatedDraftCandidate | None = None,
     knowledge_update: DraftKnowledgeUpdate | None = None,
+    checkpoint_path: str | None = None,
+    diagnostics: list[DraftingDiagnostic] | tuple[DraftingDiagnostic, ...] = (),
 ) -> DraftingWorkflowResult:
     return DraftingWorkflowResult(
         status, context, candidates, best, knowledge_update,
-        tuple(calls), tuple(sorted(counts.items())), reason,
+        tuple(calls), tuple(sorted(counts.items())), reason, checkpoint_path, tuple(diagnostics),
     )
+
+
+def _candidate_hash(candidate: DraftCandidate) -> str:
+    return hashlib.sha256(candidate.content.encode("utf-8")).hexdigest()
+
+
+def _response_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()

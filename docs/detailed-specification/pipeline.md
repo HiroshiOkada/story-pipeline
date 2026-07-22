@@ -128,10 +128,15 @@
 4. reviewer が要求適合と品質を評価する。
 5. error または修正価値の高い warning があれば上限内で改稿する。
 6. 整合性を再評価する。
-7. 最良版を `episodes/NNNN.md` に採用する。
-8. 本文で確定した事実だけを canon と人物状態へ反映する。
+7. 最良版を入力 hash と評価 hash に束縛した内部 checkpoint へ保存する。
+8. 本文で確定した事実と人物状態を抽出し、evidence を検証する。
+9. 本文、canon、人物状態を一つの採用単位として保存し、全出力 hash の一致後に checkpoint を採用済みにする。
 
 本文の受入条件は必須条件違反なし、整合性 error なし、対象話として開始・終了が成立することとする。一般的な文章上の好みだけを理由に人間の指定文体を変更しない。
+
+本文 JSON、Markdown 機械検査、評価、knowledge 抽出は独立した工程とする。本文評価通過後に knowledge が失敗した場合、正式な `episodes/` へはまだ保存せず、`.story-pipeline/checkpoints/NNNN/draft.json` から knowledge 工程だけを再開する。要求 revision、全入力 hash、本文 hash、評価対象 hash のいずれかが変わった checkpoint は再利用しない。
+
+evidence は空白と改行を除いて照合し、元本文上で一意な場合だけ元の完全一致文字列へ戻して保存する。本文外、言い換え、複数一致は拒否する。
 
 ### 4.6 章改稿 `chapter_revision`
 

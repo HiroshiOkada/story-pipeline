@@ -531,8 +531,9 @@ def parse_draft_knowledge_update(
         if len(people) != len(set(people)):
             raise _drafting_format_error(f"canon_facts/{index}/people に重複があります")
         _validate_update_evidence(item, draft_body, expected_source, f"canon_facts/{index}")
+        evidence = _resolve_update_evidence(item["evidence"], draft_body, f"canon_facts/{index}")
         canon_facts.append(CanonFact(
-            item["fact"], item["evidence"], item["source"],
+            item["fact"], evidence, item["source"],
             item["established_at"], tuple(people),
         ))
     character_states: list[CharacterStateUpdate] = []
@@ -540,8 +541,11 @@ def parse_draft_knowledge_update(
         expected = {"character", "state", "evidence", "source", "established_at"}
         _validate_update_object(item, expected, f"character_states/{index}")
         _validate_update_evidence(item, draft_body, expected_source, f"character_states/{index}")
+        evidence = _resolve_update_evidence(
+            item["evidence"], draft_body, f"character_states/{index}"
+        )
         character_states.append(CharacterStateUpdate(
-            item["character"], item["state"], item["evidence"],
+            item["character"], item["state"], evidence,
             item["source"], item["established_at"],
         ))
     return DraftKnowledgeUpdate(tuple(canon_facts), tuple(character_states))
@@ -599,8 +603,49 @@ def _validate_update_evidence(
 ) -> None:
     if item["source"] != expected_source:
         raise _drafting_format_error(f"{location}/source が採用本文パスと一致しません")
-    if draft_content.count(item["evidence"]) != 1:
+    if _resolved_evidence_matches(item["evidence"], draft_content) != 1:
         raise _drafting_format_error(f"{location}/evidence が採用本文に一意に完全一致しません")
+
+
+def _resolve_update_evidence(evidence: str, draft_content: str, location: str) -> str:
+    normalized_evidence = "".join(character for character in evidence if not character.isspace())
+    if not normalized_evidence:
+        raise _drafting_format_error(f"{location}/evidence は空白以外の文字が必要です")
+    normalized_draft, positions = _non_whitespace_with_positions(draft_content)
+    starts = _substring_starts(normalized_draft, normalized_evidence)
+    if len(starts) != 1:
+        raise _drafting_format_error(f"{location}/evidence が採用本文に一意に完全一致しません")
+    start = starts[0]
+    return draft_content[positions[start]:positions[start + len(normalized_evidence) - 1] + 1]
+
+
+def _resolved_evidence_matches(evidence: str, draft_content: str) -> int:
+    normalized_evidence = "".join(character for character in evidence if not character.isspace())
+    if not normalized_evidence:
+        return 0
+    normalized_draft, _ = _non_whitespace_with_positions(draft_content)
+    return len(_substring_starts(normalized_draft, normalized_evidence))
+
+
+def _non_whitespace_with_positions(content: str) -> tuple[str, list[int]]:
+    characters: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(content):
+        if not character.isspace():
+            characters.append(character)
+            positions.append(index)
+    return "".join(characters), positions
+
+
+def _substring_starts(content: str, target: str) -> list[int]:
+    starts: list[int] = []
+    offset = 0
+    while True:
+        found = content.find(target, offset)
+        if found < 0:
+            return starts
+        starts.append(found)
+        offset = found + 1
 
 
 def _candidate_json(candidate: DraftCandidate) -> str:

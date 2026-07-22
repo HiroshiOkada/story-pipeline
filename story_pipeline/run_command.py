@@ -83,6 +83,7 @@ def _print_result(
     models = sorted({(item["role"], item["api_model"]) for item in result.run["model_attempts"]})
     print("Models: " + (", ".join(f"{role}={model}" for role, model in models) or "none"), file=target)
     counts = result.run["call_counts"]
-    print("Calls: " + ", ".join(f"{name}={counts[name]}" for name in ("generation", "review", "revision", "summary")), file=target)
+    names = ("generation", "review", "revision", "knowledge", "summary")
+    print("Calls: " + ", ".join(f"{name}={counts.get(name, 0)}" for name in names), file=target)
     print(f"Report: {report}", file=target)
     print(f"Next request: {next_request}", file=target)

@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from story_pipeline.config import load_config
+from story_pipeline.draft_checkpoint import validate_draft_checkpoints
 from story_pipeline.runs import validate_runs
 from story_pipeline.state import load_state
 from story_pipeline.status import inspect_status
@@ -39,6 +40,7 @@ def validate_project_files(root: Path, collector: IssueCollector) -> ValidationC
     state = state_value if isinstance(state_value, dict) else None
     _validate_managed_paths(root, collector)
     runs = validate_runs(root, state, collector)
+    validate_draft_checkpoints(root, runs, collector)
     if state is not None:
         _validate_status_consistency(root, state, collector)
     _validate_request_correspondence(root, state, runs, collector)
