@@ -26,6 +26,8 @@ from story_pipeline.knowledge_adoption import (
 )
 from story_pipeline.plotting_workflow import produce_plotting
 from story_pipeline.request_planner import PlannedRequest
+from story_pipeline.state_transitions import transition_after_draft
+from story_pipeline.story_structure import load_story_structure
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,13 +132,8 @@ def execute_planned_workflow(
                     )
                 checkpoint = prepare_checkpoint_adoption(checkpoint, hashes)
                 write_draft_checkpoint(root, checkpoint)
-        completed = sorted(set((*state["completed_episodes"], number)))
         updates = (
-            {
-                "phase": "episode_planning",
-                "completed_episodes": completed,
-                "next_episode": min(9999, max(state["next_episode"], number + 1)),
-            }
+            transition_after_draft(load_story_structure(root), state, number)
             if documents and result.status == "completed"
             else {}
         )
