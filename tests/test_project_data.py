@@ -154,6 +154,25 @@ class StateTest(unittest.TestCase):
                 load_state(root)
             self.assertEqual(raised.exception.location, "/active_request")
 
+    def test_9999_sentinel_is_only_allowed_in_terminal_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            create_scaffold(root)
+            path = root / ".story-pipeline/state.json"
+            state = json.loads(path.read_text(encoding="utf-8"))
+            state.update({
+                "phase": "chapter_revision", "current_chapter": 9999,
+                "next_chapter": 9999, "next_episode": 9999,
+                "completed_episodes": [9999],
+            })
+            path.write_text(json.dumps(state), encoding="utf-8")
+            self.assertEqual(load_state(root)["next_episode"], 9999)
+
+            state["phase"] = "episode_planning"
+            path.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaises(StoryPipelineError):
+                load_state(root)
+
 
 if __name__ == "__main__":
     unittest.main()
