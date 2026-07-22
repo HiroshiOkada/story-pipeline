@@ -66,10 +66,18 @@ def prepare_run(
         restored = restore_managed_files(project_root, preflight, output)
         if request.mode == "resume":
             run = _load_resume_run(project_root, request.number)
+            request_hash = sha256_file(project_root / request.relative_path)
+            changed_paths = _changed_start_paths(preflight, request.relative_path)
+            input_commit = _record_resume_inputs(
+                project_root, request.number, changed_paths, request_hash != run["request_sha256"]
+            )
+            changed_request = request_hash != run["request_sha256"]
             run = resume_run_record(
                 run,
-                step=run["resume"]["step"],
-                reason=run["resume"]["reason"],
+                step="interpret_request" if changed_request else run["resume"]["step"],
+                reason=("要求改訂を受け入れて再解釈" if changed_request else run["resume"]["reason"]),
+                request_sha256=request_hash,
+                input_commit=input_commit if changed_request else None,
             )
             state = persist_resumed_execution(project_root, state, run)
         else:
@@ -107,6 +115,20 @@ def _changed_start_paths(preflight: GitPreflight, request_path: str) -> tuple[st
             }
         )
     )
+
+
+def _record_resume_inputs(
+    root: Path,
+    request_number: int,
+    paths: tuple[str, ...],
+    request_changed: bool,
+) -> str:
+    """再開入力の差分を限定 commit し、改訂境界となる commit を返す。"""
+    commit = commit_start_inputs(root, request_number, paths)
+    boundary = commit or current_commit(root)
+    if request_changed and not boundary:
+        raise ValueError("要求改訂の入力 commit を特定できません")
+    return boundary
 
 
 def _load_resume_run(root: Path, number: int) -> dict[str, Any]:

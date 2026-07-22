@@ -124,6 +124,23 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(resumed["started_at"], NOW)
         self.assertEqual(resumed["request_revisions"][-1]["input_commit"], "d" * 40)
 
+    def test_unchanged_resume_does_not_add_revision(self) -> None:
+        run = finalize_run_record(
+            self.make_run(), "failed", resume_step="generate", resume_reason="temporary", now=LATER
+        )
+
+        resumed = resume_run_record(
+            run,
+            step="generate",
+            reason="retry",
+            request_sha256="b" * 64,
+            now="2026-07-22T01:25:45Z",
+        )
+
+        self.assertEqual(len(resumed["request_revisions"]), 1)
+        self.assertEqual(resumed["current_step"], "generate")
+        self.assertEqual(resumed["resume_count"], 1)
+
     def test_version_one_record_is_migrated_without_losing_initial_values(self) -> None:
         run = self.make_run()
         run["schema_version"] = 1
