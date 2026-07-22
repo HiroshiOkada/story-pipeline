@@ -110,6 +110,17 @@ class FinalMechanicalCheck:
         return not self.issues
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedFinalRevision:
+    candidate: FinalRevisionCandidate | None
+    documents: tuple[tuple[str, str], ...]
+    evaluation: FinalEvaluation
+
+    @property
+    def revision_count(self) -> int:
+        return 0 if self.candidate is None else self.candidate.revision_count
+
+
 def build_final_revision_context(
     root: Path,
     request: SelectedRequest,
@@ -349,6 +360,88 @@ def check_final_revision_candidate(
             issues.append(FinalMechanicalIssue("INVALID_MARKDOWN", location, error.reason))
     ordered = tuple((path, documents[path]) for path, _ in original_documents)
     return FinalMechanicalCheck(ordered, tuple(issues))
+
+
+def build_final_revision_messages(
+    context: FinalRevisionContext,
+    current: EvaluatedFinalRevision,
+) -> tuple[dict[str, str], ...]:
+    """評価済み全本文と指摘だけを局所改稿役へ渡す。"""
+    document_data = json.dumps(
+        [{"path": path, "content": content} for path, content in current.documents],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    evaluation_data = json.dumps({
+        "decision": current.evaluation.decision,
+        "complete": current.evaluation.complete,
+        "reason": current.evaluation.reason,
+        "issues": [
+            {
+                "severity": issue.severity, "category": issue.category,
+                "location": issue.location, "evidence": issue.evidence,
+                "instruction": issue.instruction,
+            } for issue in current.evaluation.issues
+        ],
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(document_data.encode("utf-8")).hexdigest()
+    return (
+        {
+            "role": "system", "content": (
+                "あなたは Story Pipeline の最終 reviser です。全体評価で指摘された箇所だけを、"
+                "一意な原文引用と置換文で局所改稿します。章構成、結末、根本方針を変更せず、"
+                "応答は指定 JSON object だけにします。"
+            ),
+        },
+        *context.messages[1:3],
+        {
+            "role": "user", "content": (
+                f"現在の全話本文:\n--- BEGIN NOVEL EPISODES sha256={digest} ---\n"
+                f"{document_data}\n--- END NOVEL EPISODES sha256={digest} ---"
+            ),
+        },
+        {"role": "user", "content": "全体評価（データ）:\n" + evaluation_data},
+        {
+            "role": "user", "content": (
+                "error と修正価値の高い warning を解消する最小限の revisions を返してください。"
+                "各 original は対象ファイルに1回だけ完全一致する連続文字列にしてください。"
+            ),
+        },
+    )
+
+
+def run_final_revision_loop(
+    initial: EvaluatedFinalRevision,
+    maximum_revisions: int,
+    revise: Callable[[EvaluatedFinalRevision, int], tuple[FinalRevisionCandidate, tuple[tuple[str, str], ...]]],
+    evaluate: Callable[[tuple[tuple[str, str], ...]], FinalEvaluation],
+) -> tuple[EvaluatedFinalRevision, ...]:
+    """完成、判断待ち、上限到達まで局所改稿と全体再評価を繰り返す。"""
+    if maximum_revisions < 0:
+        raise ValueError("maximum_revisions は0以上である必要があります")
+    records = [initial]
+    while (
+        not records[-1].evaluation.adoptable
+        and records[-1].evaluation.decision != "awaiting_human"
+        and len(records) - 1 < maximum_revisions
+    ):
+        candidate, documents = revise(records[-1], len(records))
+        records.append(EvaluatedFinalRevision(candidate, documents, evaluate(documents)))
+    return tuple(records)
+
+
+def select_best_final_revision(
+    candidates: list[EvaluatedFinalRevision] | tuple[EvaluatedFinalRevision, ...],
+) -> EvaluatedFinalRevision | None:
+    """完成判定済み候補だけから決定的に最良版を選ぶ。"""
+    adoptable = [candidate for candidate in candidates if candidate.evaluation.adoptable]
+    if not adoptable:
+        return None
+    return max(adoptable, key=lambda item: (
+        item.evaluation.score("request_fit"),
+        item.evaluation.score("causal_consistency"),
+        sum(score for _, score in item.evaluation.scores),
+        -item.revision_count,
+    ))
 
 
 def _parse_human_decision(value: Any) -> FinalHumanDecision | None:

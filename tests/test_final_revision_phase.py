@@ -9,12 +9,16 @@ import unittest
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.final_revision import (
     DEFAULT_FINAL_REVISION_CONTEXT,
+    EvaluatedFinalRevision,
     FINAL_SCORE_NAMES,
     build_final_revision_context,
+    build_final_revision_messages,
     check_final_revision_candidate,
     final_evaluation_response_format,
     parse_final_evaluation,
     parse_final_revision_candidate,
+    run_final_revision_loop,
+    select_best_final_revision,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
@@ -135,6 +139,49 @@ class FinalRevisionContextTest(unittest.TestCase):
         checked = check_final_revision_candidate(candidate, context, originals)
         self.assertFalse(checked.accepted)
         self.assertEqual(checked.issues[0].code, "FULL_TEXT_REQUIRED")
+
+    def test_revision_loop_rechecks_and_selects_completed_novel(self) -> None:
+        context = build_final_revision_context(
+            self.root, self.request, self.interpretation, max_full_text_characters=10_000
+        )
+        scores = {name: 4 for name in FINAL_SCORE_NAMES}
+        revise_evaluation = parse_final_evaluation(json.dumps({
+            "decision": "revise", "complete": False, "reason": "人物変化が弱い",
+            "summary": "改稿が必要", "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        accepted = parse_final_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "作品として完成",
+            "summary": "採用", "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        initial = EvaluatedFinalRevision(None, originals, revise_evaluation)
+
+        def revise(current, count):
+            messages = build_final_revision_messages(context, current)
+            self.assertIn("BEGIN NOVEL EPISODES", messages[-3]["content"])
+            candidate = parse_final_revision_candidate(json.dumps({"revisions": [{
+                "path": "episodes/0004.md", "original": "出来事4。", "replacement": "出来事4を経て成長した。",
+                "rationale": "人物変化を明確化",
+            }]}, ensure_ascii=False), generation=count, model_reference="mock", input_hashes=(), revision_count=count)
+            checked = check_final_revision_candidate(candidate, context, current.documents)
+            self.assertTrue(checked.accepted)
+            return candidate, checked.documents
+
+        records = run_final_revision_loop(initial, 2, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertIs(select_best_final_revision(records), records[-1])
+
+    def test_best_final_candidate_prefers_fewer_revisions_after_scores(self) -> None:
+        evaluation = parse_final_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": {name: 5 for name in FINAL_SCORE_NAMES}, "human_decision": None,
+        }, ensure_ascii=False))
+        candidate = parse_final_revision_candidate(json.dumps({"revisions": [{
+            "path": "episodes/0001.md", "original": "A", "replacement": "B", "rationale": "修正",
+        }]}), generation=2, model_reference="mock", input_hashes=(), revision_count=1)
+        original = EvaluatedFinalRevision(None, (), evaluation)
+        revised = EvaluatedFinalRevision(candidate, (), evaluation)
+        self.assertIs(select_best_final_revision((revised, original)), original)
 
 
 if __name__ == "__main__":
