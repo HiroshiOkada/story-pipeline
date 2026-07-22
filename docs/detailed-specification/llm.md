@@ -157,3 +157,9 @@ JSON fence は単一 fence の場合だけ除去できる。説明文から JSON
 - URL の userinfo と、token/key/secret を示す query 値
 
 置換後も秘密が含まれる可能性がある API response body は全文を保持せず、HTTP status、provider、エラー分類、サニタイズした短い message だけを使用する。
+
+## 12. 進捗と計測
+
+非ストリーミング呼び出しの開始、成功、失敗、再試行待機、フォールバックを構造化 event として標準エラーと run JSON へ出力する。単一 transport 試行が30秒を超える間は、追加 API 呼び出しを行わず30秒ごとに heartbeat を出す。event には管理済みの model reference、試行番号、failure kind、待機・所要時間だけを含め、messages や認証値を渡さない。
+
+時刻表示には UTC 時計、所要時間には単調時計を用いる。provider usage は応答に存在する整数値だけを正規化し、欠落や不正値を推測しない。

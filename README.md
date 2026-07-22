@@ -86,6 +86,8 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 - 終了ステータスが `awaiting_human` の場合は、報告の判断 ID を確認して次の要求に回答します。
 - 終了ステータスが `failed` の場合は、空の次要求を残したまま同じ要求を再実行できます。失敗原因に合わせて元の要求を直した場合、その内容は改訂履歴と入力 commit に記録されます。次要求へ具体的な内容を書いた場合は、改訂か新規要求かを決めるまで安全停止します。
 - 本文評価後に knowledge 更新だけが失敗した場合、検証済み本文は内部 checkpoint に保存され、次回は本文を再生成せず knowledge 工程から再開します。checkpoint や作品ファイルを手動変更した場合は `validate` で確認してください。
+- `run` は LLM 通信の開始、再試行待機、フォールバック、30秒ごとの heartbeat を JSON Lines で標準エラーへ出力します。prompt、応答本文、API キー、完全 URL は出力しません。
+- `.story-pipeline/runs/NNNN.json` に論理呼び出し、transport 試行、待機時間、provider usage、lifecycle、incident ID を記録します。usage が提供されない値は推測せず `null` / `unknown` のまま扱います。予期しない失敗時は標準エラーの incident ID を実行記録と照合できます。
 - 旧バージョンで章内最終話の後も次話計画を指している場合は、作業ツリーを整理して `story-pipeline migrate-state` を実行します。作品本文は変更せず、状態変更だけを専用 commit に保存します。
 
 ## 開発者向け検証
