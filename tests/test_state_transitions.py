@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from story_pipeline.state_transitions import transition_after_chapter, transition_after_draft
+from story_pipeline.state_transitions import (
+    all_chapters_complete_after,
+    transition_after_chapter,
+    transition_after_draft,
+)
 from story_pipeline.story_structure import ChapterEpisodes, StoryStructure
 
 
@@ -37,6 +41,8 @@ class StateTransitionTest(unittest.TestCase):
         self.assertEqual(second["phase"], "final_revision")
         self.assertIsNone(second["current_chapter"])
         self.assertEqual((second["next_chapter"], second["next_episode"]), (3, 5))
+        self.assertFalse(all_chapters_complete_after(self.structure(), (), 1))
+        self.assertTrue(all_chapters_complete_after(self.structure(), (1,), 2))
 
     def test_9999_uses_non_wrapping_terminal_sentinel(self) -> None:
         structure = StoryStructure((ChapterEpisodes(9999, "chapters/9999.md", (9999,)),))
