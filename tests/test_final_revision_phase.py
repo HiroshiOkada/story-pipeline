@@ -7,7 +7,13 @@ import tempfile
 import unittest
 
 from story_pipeline.errors import StoryPipelineError
-from story_pipeline.final_revision import DEFAULT_FINAL_REVISION_CONTEXT, build_final_revision_context
+from story_pipeline.final_revision import (
+    DEFAULT_FINAL_REVISION_CONTEXT,
+    FINAL_SCORE_NAMES,
+    build_final_revision_context,
+    final_evaluation_response_format,
+    parse_final_evaluation,
+)
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
 from story_pipeline.scaffold import create_scaffold
@@ -70,6 +76,37 @@ class FinalRevisionContextTest(unittest.TestCase):
             build_final_revision_context(
                 self.root, self.request, self.interpretation, max_full_text_characters=1
             )
+
+    def test_evaluation_requires_explicit_completion_and_all_scores(self) -> None:
+        payload = {
+            "decision": "accept", "complete": True, "reason": "結末まで成立した",
+            "summary": "完成", "issues": [],
+            "scores": {name: 5 for name in FINAL_SCORE_NAMES}, "human_decision": None,
+        }
+        self.assertTrue(parse_final_evaluation(json.dumps(payload, ensure_ascii=False)).adoptable)
+        payload["complete"] = False
+        self.assertFalse(parse_final_evaluation(json.dumps(payload, ensure_ascii=False)).adoptable)
+        del payload["scores"]["ending"]
+        with self.assertRaises(StoryPipelineError):
+            parse_final_evaluation(json.dumps(payload, ensure_ascii=False))
+
+    def test_awaiting_human_requires_structured_large_change_decision(self) -> None:
+        payload = {
+            "decision": "awaiting_human", "complete": False, "reason": "結末変更が必要",
+            "summary": "根本方針に影響", "issues": [],
+            "scores": {name: 3 for name in FINAL_SCORE_NAMES},
+            "human_decision": {"question": "結末を変更しますか", "reason": "複数章へ波及", "choices": ["維持", "変更"]},
+        }
+        evaluation = parse_final_evaluation(json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(evaluation.human_decision.choices, ("維持", "変更"))
+        payload["human_decision"] = None
+        with self.assertRaises(StoryPipelineError):
+            parse_final_evaluation(json.dumps(payload, ensure_ascii=False))
+
+    def test_evaluation_schema_is_strict(self) -> None:
+        schema = final_evaluation_response_format()["json_schema"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(set(schema["properties"]["scores"]["required"]), set(FINAL_SCORE_NAMES))
 
 
 if __name__ == "__main__":
