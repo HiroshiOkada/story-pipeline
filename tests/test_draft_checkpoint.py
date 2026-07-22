@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +12,7 @@ from story_pipeline.draft_checkpoint import (
     mark_checkpoint_adopted,
     prepare_checkpoint_adoption,
     reusable_checkpoint,
+    validate_draft_checkpoints,
     write_draft_checkpoint,
 )
 from story_pipeline.drafting import (
@@ -26,6 +26,7 @@ from story_pipeline.drafting import (
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.knowledge_adoption import build_draft_adoption_documents, document_hashes
+from story_pipeline.validation import IssueCollector
 
 
 class DraftCheckpointTest(unittest.TestCase):
@@ -123,6 +124,10 @@ class DraftCheckpointTest(unittest.TestCase):
         (self.root / episode_path).parent.mkdir(exist_ok=True)
         (self.root / episode_path).write_text(episode_content, encoding="utf-8")
         self.assertEqual(inspect_checkpoint_adoption(self.root, checkpoint), "partial")
+        write_draft_checkpoint(self.root, checkpoint)
+        collector = IssueCollector()
+        validate_draft_checkpoints(self.root, {0: {}}, collector)
+        self.assertIn("CHECKPOINT_PARTIAL_ADOPTION", {item.code for item in collector.issues})
 
         for relative, content in documents[1:]:
             (self.root / relative).write_text(content, encoding="utf-8")

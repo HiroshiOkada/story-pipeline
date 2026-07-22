@@ -214,13 +214,18 @@ def _derived_steps(start: RunStart, run: dict[str, Any], workflow: WorkflowExecu
         diagnostic_by_boundary: dict[str, list[Any]] = {}
         for item in workflow.diagnostics:
             diagnostic_by_boundary.setdefault(item.boundary, []).append(item)
+        failed_boundary = (
+            workflow.diagnostics[-1].boundary
+            if workflow.status == "failed" and workflow.diagnostics
+            else None
+        )
         for boundary in ("draft_json", "mechanical", "evaluation", "knowledge", "checkpoint"):
             items = diagnostic_by_boundary.get(boundary, [])
             result = "; ".join(
                 f"{item.code}[{item.attempt}]: {item.reason}" for item in items
             ) or "検証エラーなし"
             run, actual = _begin(start, run, f"draft_{boundary}")
-            status = "failed" if items and boundary != "checkpoint" else "completed"
+            status = "failed" if boundary == failed_boundary else "completed"
             run = _finish(start, run, actual, status, result=result)
     return run
 

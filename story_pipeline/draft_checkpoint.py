@@ -19,14 +19,13 @@ from story_pipeline.drafting import (
     DraftEvaluation,
     DraftEvaluationIssue,
     DraftKnowledgeUpdate,
-    DraftMechanicalCheck,
-    DraftMechanicalIssue,
     DraftingContext,
     EvaluatedDraftCandidate,
     check_draft_candidate,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.persistence import atomic_write_json
+from story_pipeline.validation import IssueCollector
 
 
 HASH = re.compile(r"^[0-9a-f]{64}$")
@@ -137,6 +136,66 @@ def load_draft_checkpoint(root: Path, request_number: int) -> dict[str, Any] | N
             "checkpoint と Git 履歴を確認してから再実行してください",
             4,
         ) from error
+
+
+def validate_draft_checkpoints(
+    root: Path, runs: dict[int, dict[str, Any]], collector: IssueCollector
+) -> None:
+    """保存済み checkpoint の構造、run 対応、採用状態を副作用なしで検査する。"""
+    directory = root / ".story-pipeline" / "checkpoints"
+    if not directory.exists() and not directory.is_symlink():
+        return
+    try:
+        if not stat.S_ISDIR(os.lstat(directory).st_mode):
+            raise OSError
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError:
+        collector.error(
+            "CHECKPOINT_DIRECTORY_INVALID", "checkpoint ディレクトリが安全ではありません",
+            ".story-pipeline/checkpoints",
+        )
+        return
+    for entry in entries:
+        if not re.fullmatch(r"[0-9]{4}", entry.name):
+            collector.warning(
+                "UNKNOWN_CHECKPOINT_ENTRY", "checkpoint の要求番号形式に一致しません",
+                entry.relative_to(root).as_posix(),
+            )
+            continue
+        number = int(entry.name)
+        relative = checkpoint_relative_path(number)
+        try:
+            checkpoint = load_draft_checkpoint(root, number)
+        except StoryPipelineError as error:
+            collector.error("CHECKPOINT_INVALID", error.reason, relative)
+            continue
+        if checkpoint is None:
+            collector.error("CHECKPOINT_FILE_MISSING", "draft checkpoint がありません", relative)
+            continue
+        if number not in runs:
+            collector.error("CHECKPOINT_RUN_MISSING", "checkpoint に対応する run がありません", relative)
+        adoption = checkpoint["adoption"]["status"]
+        actual = inspect_checkpoint_adoption(root, checkpoint)
+        if actual == "partial":
+            collector.error(
+                "CHECKPOINT_PARTIAL_ADOPTION", "本文、canon、人物状態が部分適用されています", relative
+            )
+        elif adoption == "adopted" and actual != "all":
+            collector.error(
+                "CHECKPOINT_ADOPTED_OUTPUT_MISMATCH", "採用済み checkpoint の出力 hash が一致しません", relative
+            )
+        for path, expected in checkpoint["input_hashes"].items():
+            if path == "request_interpretation":
+                continue
+            try:
+                target = root / path
+                actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            except OSError:
+                actual_hash = ""
+            if actual_hash != expected:
+                collector.warning(
+                    "CHECKPOINT_STALE_INPUT", "checkpoint の入力 hash が現在のファイルと異なります", path
+                )
 
 
 def reusable_checkpoint(
@@ -334,12 +393,6 @@ def validate_checkpoint_data(
     if adoption["status"] in {"ready", "adopted"} and knowledge["status"] != "completed":
         raise ValueError(f"{location} は knowledge 未完了のまま採用できません")
     return value
-
-
-def _body_character_count(content: str) -> int:
-    marker = "## 本文"
-    body = content.split(marker, 1)[1] if marker in content else ""
-    return len(body.replace("\r", "").replace("\n", ""))
 
 
 def _digest(content: str) -> str:

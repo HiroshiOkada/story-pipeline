@@ -35,6 +35,7 @@ episodes/[0-9][0-9][0-9][0-9].md
 requests/[0-9][0-9][0-9][0-9]_agent.md
 .story-pipeline/state.json
 .story-pipeline/runs/[0-9][0-9][0-9][0-9].json
+.story-pipeline/checkpoints/[0-9][0-9][0-9][0-9]/draft.json
 ```
 
 許可リストはパス全体へ一致させる。類似名、サブディレクトリ、5桁番号、バックアップ拡張子を含めない。`requests/NNNN.md`、設定、追加資料は管理ファイルではない。

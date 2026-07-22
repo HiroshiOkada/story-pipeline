@@ -166,6 +166,8 @@ commit 失敗時は scaffold を削除せず、今回 stage したパスだけ�
 | `episode_plans/NNNN.md` | 目的、登場人物、開始状態、終了状態、場面、開示情報、感情変化、伏線、次話への引き、目標文字数 |
 | `episodes/NNNN.md` | 話タイトル、本文 |
 
+`.story-pipeline/checkpoints/NNNN/draft.json` は本文評価通過後から knowledge と正式採用が完了するまでの内部成果物である。作品本文として直接編集・参照せず、`validate` の hash 検査と Git 履歴を使って復旧する。
+
 ## 4. 採番規則
 
 ### 4.1 要求番号

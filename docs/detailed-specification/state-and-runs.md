@@ -92,6 +92,7 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
     "generation": 0,
     "review": 0,
     "revision": 0,
+    "knowledge": 0,
     "summary": 0
   },
   "model_attempts": [],
@@ -117,7 +118,22 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
 
 version 1 の run は、`request_sha256`、`start_commit`、`started_at` から初回 revision を補い、`resume_count=0` の version 2 として読み込む。次に run を永続化すると version 2 へ移行する。
 
-### 3.2 工程
+### 3.2 本文 checkpoint
+
+採用可能な本文を正式採用前に `.story-pipeline/checkpoints/NNNN/draft.json` へ保存する。checkpoint は要求番号と revision、対象話、全入力 hash、正規化済み本文と hash、機械検査、採用評価と評価対象 hash、生成・評価モデル、knowledge 状態、採用状態と期待出力 hash を持つ。プロンプト、応答全文、秘密は保存しない。
+
+状態は次の順にだけ進める。
+
+```text
+knowledge=pending, adoption=pending
+knowledge=completed, adoption=pending
+knowledge=completed, adoption=ready
+knowledge=completed, adoption=adopted
+```
+
+`ready` は本文、canon、characters の期待 hash を checkpoint へ先に保存した状態である。実ファイルの一致が0件なら未適用、全件なら全適用として再開できる。一部だけ一致する場合は部分適用として停止し、自動上書きしない。`adopted` は全出力 hash の一致後だけ記録する。
+
+### 3.3 工程
 
 `steps` の要素は次の形式とする。
 
@@ -137,9 +153,9 @@ version 1 の run は、`request_sha256`、`start_commit`、`started_at` から�
 
 `result` は秘密情報を含まない短い機械可読または人間可読の要約とし、LLM 応答全文を保存しない。
 
-### 3.3 モデル試行とエラー
+### 3.4 モデル試行とエラー
 
-`model_attempts` は論理呼び出しごとに role、モデル定義名、API 上のモデル名、開始・終了日時、結果分類、消費トークン数が取得できた場合の値、および適用された要求 revision の 0 始まり番号を記録する。プロンプト、応答全文、API キー、認証ヘッダーは記録しない。
+`model_attempts` は論理呼び出しごとに role、purpose（generation、review、revision、knowledge、summary）、モデル定義名、API 上のモデル名、開始・終了日時、結果分類、消費トークン数が取得できた場合の値、および適用された要求 revision の 0 始まり番号を記録する。プロンプト、応答全文、API キー、認証ヘッダーは記録しない。
 
 エラー要素は次の形式とする。
 
@@ -211,6 +227,7 @@ LLM 呼び出し回数は要求単位の累積値を保持し、プロセス再�
 - 完了章、完了話とファイルの存在
 - 次番号と既存最大番号
 - 実行記録に保存された入出力ハッシュ
+- 本文 checkpoint の schema、入力・候補・knowledge・期待出力 hash、部分適用状態
 - phase に必要な成果物の存在
 
 `status` は不一致を警告として表示し、変更しない。`validate` は不一致をエラーまたは警告に分類して非ゼロ終了できるが、自動修復しない。
