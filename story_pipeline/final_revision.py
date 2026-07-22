@@ -76,6 +76,40 @@ class FinalEvaluation:
         return dict(self.scores)[name]
 
 
+@dataclass(frozen=True, slots=True)
+class FinalLocalRevision:
+    path: str
+    original: str
+    replacement: str
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinalRevisionCandidate:
+    revisions: tuple[FinalLocalRevision, ...]
+    generation: int
+    model_reference: str
+    input_hashes: tuple[tuple[str, str], ...]
+    revision_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class FinalMechanicalIssue:
+    code: str
+    location: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinalMechanicalCheck:
+    documents: tuple[tuple[str, str], ...]
+    issues: tuple[FinalMechanicalIssue, ...]
+
+    @property
+    def accepted(self) -> bool:
+        return not self.issues
+
+
 def build_final_revision_context(
     root: Path,
     request: SelectedRequest,
@@ -222,6 +256,99 @@ def final_evaluation_response_format() -> dict[str, Any]:
         },
     }
     return {"type": "json_schema", "json_schema": {"name": "final_evaluation", "strict": True, "schema": schema}}
+
+
+def parse_final_revision_candidate(
+    content: str,
+    *,
+    generation: int,
+    model_reference: str,
+    input_hashes: tuple[tuple[str, str], ...],
+    revision_count: int = 0,
+) -> FinalRevisionCandidate:
+    """話本文の一意引用に基づく局所改稿だけを受け取る。"""
+    value = parse_json_object(content, {"revisions": FieldRule((list,))})
+    revisions: list[FinalLocalRevision] = []
+    for index, item in enumerate(value["revisions"]):
+        if not isinstance(item, dict) or set(item) != {"path", "original", "replacement", "rationale"}:
+            raise _format_error(f"revisions/{index} のキーが出力契約と一致しません")
+        if any(not isinstance(item[name], str) for name in item):
+            raise _format_error(f"revisions/{index} のフィールドは文字列である必要があります")
+        revisions.append(FinalLocalRevision(
+            item["path"], item["original"], item["replacement"], item["rationale"]
+        ))
+    if not revisions:
+        raise _format_error("全体改稿候補には1件以上の revisions が必要です")
+    return FinalRevisionCandidate(
+        tuple(revisions), generation, model_reference, input_hashes, revision_count
+    )
+
+
+def final_revision_response_format() -> dict[str, Any]:
+    revision = {
+        "type": "object", "additionalProperties": False,
+        "required": ["path", "original", "replacement", "rationale"],
+        "properties": {
+            "path": {"type": "string", "pattern": r"^episodes/[0-9]{4}\.md$"},
+            "original": {"type": "string", "minLength": 1},
+            "replacement": {"type": "string", "minLength": 1},
+            "rationale": {"type": "string", "minLength": 1},
+        },
+    }
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["revisions"],
+        "properties": {"revisions": {"type": "array", "minItems": 1, "items": revision}},
+    }
+    return {"type": "json_schema", "json_schema": {"name": "final_local_revision", "strict": True, "schema": schema}}
+
+
+def check_final_revision_candidate(
+    candidate: FinalRevisionCandidate,
+    context: FinalRevisionContext,
+    original_documents: tuple[tuple[str, str], ...],
+) -> FinalMechanicalCheck:
+    """全本文モードの対象話に限り、一意引用だけを置換する。"""
+    documents = dict(original_documents)
+    issues: list[FinalMechanicalIssue] = []
+    if context.mode != "full_text":
+        return FinalMechanicalCheck(
+            original_documents,
+            (FinalMechanicalIssue(
+                "FULL_TEXT_REQUIRED", "final_revision",
+                "章要約モードでは本文の自動改稿を行えません",
+            ),),
+        )
+    targets = set(context.episode_paths)
+    for index, revision in enumerate(candidate.revisions):
+        location = f"revisions/{index} {revision.path}"
+        if revision.path not in targets or revision.path not in documents:
+            issues.append(FinalMechanicalIssue(
+                "TARGET_OUT_OF_SCOPE", location, "改稿対象が作品内本文ではありません"
+            ))
+            continue
+        if not revision.original.strip() or not revision.replacement.strip():
+            issues.append(FinalMechanicalIssue(
+                "EMPTY_REPLACEMENT", location, "原文と置換文は空にできません"
+            ))
+            continue
+        if revision.original == revision.replacement:
+            issues.append(FinalMechanicalIssue(
+                "NO_CHANGE", location, "原文と置換文が同一です"
+            ))
+            continue
+        count = documents[revision.path].count(revision.original)
+        if count != 1:
+            issues.append(FinalMechanicalIssue(
+                "ORIGINAL_NOT_UNIQUE", location, f"原文引用の一致数が1件ではありません: {count}"
+            ))
+            continue
+        replaced = documents[revision.path].replace(revision.original, revision.replacement, 1)
+        try:
+            documents[revision.path] = validate_markdown(replaced)
+        except StoryPipelineError as error:
+            issues.append(FinalMechanicalIssue("INVALID_MARKDOWN", location, error.reason))
+    ordered = tuple((path, documents[path]) for path, _ in original_documents)
+    return FinalMechanicalCheck(ordered, tuple(issues))
 
 
 def _parse_human_decision(value: Any) -> FinalHumanDecision | None:

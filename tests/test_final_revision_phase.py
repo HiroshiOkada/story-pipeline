@@ -11,8 +11,10 @@ from story_pipeline.final_revision import (
     DEFAULT_FINAL_REVISION_CONTEXT,
     FINAL_SCORE_NAMES,
     build_final_revision_context,
+    check_final_revision_candidate,
     final_evaluation_response_format,
     parse_final_evaluation,
+    parse_final_revision_candidate,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
@@ -107,6 +109,32 @@ class FinalRevisionContextTest(unittest.TestCase):
         schema = final_evaluation_response_format()["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["properties"]["scores"]["required"]), set(FINAL_SCORE_NAMES))
+
+    def test_local_revision_changes_only_unique_quote(self) -> None:
+        context = build_final_revision_context(
+            self.root, self.request, self.interpretation, max_full_text_characters=10_000
+        )
+        candidate = parse_final_revision_candidate(json.dumps({"revisions": [{
+            "path": "episodes/0002.md", "original": "出来事2。", "replacement": "出来事2を経て和解した。",
+            "rationale": "人物変化を明確化",
+        }]}, ensure_ascii=False), generation=1, model_reference="mock", input_hashes=context.input_hashes)
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        checked = check_final_revision_candidate(candidate, context, originals)
+        self.assertTrue(checked.accepted)
+        self.assertIn("和解した", dict(checked.documents)["episodes/0002.md"])
+        self.assertEqual(dict(checked.documents)["episodes/0001.md"], dict(originals)["episodes/0001.md"])
+
+    def test_summary_mode_refuses_automatic_episode_revision(self) -> None:
+        context = build_final_revision_context(
+            self.root, self.request, self.interpretation, max_full_text_characters=1
+        )
+        candidate = parse_final_revision_candidate(json.dumps({"revisions": [{
+            "path": "episodes/0001.md", "original": "出来事1。", "replacement": "変更。", "rationale": "修正",
+        }]}, ensure_ascii=False), generation=1, model_reference="mock", input_hashes=())
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        checked = check_final_revision_candidate(candidate, context, originals)
+        self.assertFalse(checked.accepted)
+        self.assertEqual(checked.issues[0].code, "FULL_TEXT_REQUIRED")
 
 
 if __name__ == "__main__":
