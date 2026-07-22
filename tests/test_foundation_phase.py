@@ -9,12 +9,17 @@ import unittest
 from story_pipeline.foundation import (
     FOUNDATION_FILES,
     FOUNDATION_HEADINGS,
+    EvaluatedFoundationCandidate,
+    FoundationCandidate,
     build_foundation_context,
+    build_foundation_revision_messages,
     check_foundation_documents,
     foundation_evaluation_response_format,
     foundation_generation_response_format,
     parse_foundation_evaluation,
     parse_foundation_candidate,
+    run_foundation_revision_loop,
+    select_best_foundation,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
@@ -153,6 +158,70 @@ class FoundationPhaseTest(unittest.TestCase):
             {"request_fit", "concept_fit", "consistency"},
         )
         self.assertFalse(schema["additionalProperties"])
+
+    def test_revision_loop_preserves_four_files_and_stops_on_accept(self) -> None:
+        context = build_foundation_context(self.root, self.request, self.interpretation)
+        documents = tuple((path, f"{path} 初稿") for path in FOUNDATION_FILES)
+        revise_evaluation = parse_foundation_evaluation(
+            json.dumps(
+                {
+                    "decision": "revise",
+                    "summary": "整合性を直す",
+                    "issues": [],
+                    "scores": {"request_fit": 4, "concept_fit": 4, "consistency": 2},
+                }
+            )
+        )
+        accepted = parse_foundation_evaluation(
+            json.dumps(
+                {
+                    "decision": "accept",
+                    "summary": "採用可能",
+                    "issues": [],
+                    "scores": {"request_fit": 5, "concept_fit": 5, "consistency": 5},
+                }
+            )
+        )
+        initial = EvaluatedFoundationCandidate(
+            FoundationCandidate(documents, 1, "writer", context.input_hashes),
+            revise_evaluation,
+        )
+
+        def revise(candidate, evaluation, revision_count):
+            messages = build_foundation_revision_messages(context, candidate, evaluation)
+            self.assertIn("BEGIN FOUNDATION CANDIDATE", messages[-3]["content"])
+            return FoundationCandidate(
+                tuple((path, f"{path} 改稿") for path in FOUNDATION_FILES),
+                2,
+                "reviser",
+                context.input_hashes,
+                revision_count,
+            )
+
+        records = run_foundation_revision_loop(initial, 3, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(tuple(name for name, _ in records[-1].candidate.documents), FOUNDATION_FILES)
+        self.assertIs(select_best_foundation(records), records[-1])
+
+    def test_best_foundation_prefers_scores_then_fewer_revisions(self) -> None:
+        evaluation = parse_foundation_evaluation(
+            json.dumps(
+                {
+                    "decision": "accept",
+                    "summary": "採用可能",
+                    "issues": [],
+                    "scores": {"request_fit": 5, "concept_fit": 5, "consistency": 5},
+                }
+            )
+        )
+        documents = tuple((path, "内容") for path in FOUNDATION_FILES)
+        first = EvaluatedFoundationCandidate(
+            FoundationCandidate(documents, 1, "writer", ()), evaluation
+        )
+        revised = EvaluatedFoundationCandidate(
+            FoundationCandidate(documents, 2, "reviser", (), 1), evaluation
+        )
+        self.assertIs(select_best_foundation([revised, first]), first)
 
 
 if __name__ == "__main__":
