@@ -12,6 +12,18 @@ from story_pipeline.episode_planning_workflow import produce_episode_plan
 from story_pipeline.final_revision_workflow import produce_final_revision
 from story_pipeline.foundation_workflow import produce_foundation
 from story_pipeline.llm_client import CompletionResult, LLMClient
+from story_pipeline.draft_checkpoint import (
+    inspect_checkpoint_adoption,
+    load_draft_checkpoint,
+    prepare_checkpoint_adoption,
+    write_draft_checkpoint,
+)
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.knowledge_adoption import (
+    build_draft_adoption_documents,
+    document_hashes,
+    read_expected_documents,
+)
 from story_pipeline.plotting_workflow import produce_plotting
 from story_pipeline.request_planner import PlannedRequest
 
@@ -79,11 +91,45 @@ def execute_planned_workflow(
             root, request, interpretation, number, client,
             request_revision=request_revision,
         )
-        documents = (
-            ()
-            if result.best is None
-            else ((result.best.candidate.path, result.best.candidate.content),)
-        )
+        documents = ()
+        if result.best is not None and not hasattr(result, "knowledge_update"):
+            documents = ((result.best.candidate.path, result.best.candidate.content),)
+        elif result.best is not None and result.knowledge_update is not None:
+            checkpoint = load_draft_checkpoint(root, request.number)
+            if checkpoint is None:
+                raise ValueError("本文採用前の checkpoint がありません")
+            adoption_status = checkpoint["adoption"]["status"]
+            actual_status = inspect_checkpoint_adoption(root, checkpoint)
+            if actual_status == "partial":
+                raise StoryPipelineError(
+                    "本文、canon、人物状態が部分適用されています",
+                    result.checkpoint_path or "draft checkpoint",
+                    "作品ファイルと checkpoint の期待 hash を確認し、復旧方針を決めてください",
+                    4,
+                )
+            if actual_status == "all":
+                documents = read_expected_documents(root, checkpoint["adoption"]["output_hashes"])
+            else:
+                if adoption_status == "adopted":
+                    raise StoryPipelineError(
+                        "採用済み checkpoint の出力が失われています",
+                        result.checkpoint_path or "draft checkpoint",
+                        "Git 履歴から作品ファイルを復旧して validate を実行してください",
+                        4,
+                    )
+                documents = build_draft_adoption_documents(
+                    root, result.best.candidate, result.knowledge_update
+                )
+                hashes = document_hashes(documents)
+                if adoption_status == "ready" and hashes != checkpoint["adoption"]["output_hashes"]:
+                    raise StoryPipelineError(
+                        "再開時の採用出力が checkpoint の期待 hash と一致しません",
+                        result.checkpoint_path or "draft checkpoint",
+                        "checkpoint の入力と作品ファイルを確認してください",
+                        4,
+                    )
+                checkpoint = prepare_checkpoint_adoption(checkpoint, hashes)
+                write_draft_checkpoint(root, checkpoint)
         completed = sorted(set((*state["completed_episodes"], number)))
         updates = (
             {
@@ -91,7 +137,7 @@ def execute_planned_workflow(
                 "completed_episodes": completed,
                 "next_episode": min(9999, max(state["next_episode"], number + 1)),
             }
-            if documents
+            if documents and result.status == "completed"
             else {}
         )
     elif phase == "chapter_revision":
@@ -147,7 +193,7 @@ def execute_planned_workflow(
     evaluation = _evaluation_summary(result)
     internal_files = (
         (result.checkpoint_path,)
-        if phase == "drafting" and result.checkpoint_path is not None
+        if phase == "drafting" and getattr(result, "checkpoint_path", None) is not None
         else ()
     )
     diagnostics = tuple(getattr(result, "diagnostics", ()))

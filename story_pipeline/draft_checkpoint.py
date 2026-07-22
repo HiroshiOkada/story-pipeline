@@ -151,7 +151,6 @@ def reusable_checkpoint(
         checkpoint["request_revision"] != request_revision
         or checkpoint["target_path"] != target_path
         or checkpoint["input_hashes"] != input_hashes
-        or checkpoint["adoption"]["status"] == "adopted"
     ):
         return None
     return checkpoint_candidate(checkpoint)
@@ -223,6 +222,38 @@ def mark_checkpoint_adopted(
     updated["adoption"] = {"status": "adopted", "output_hashes": dict(output_hashes)}
     updated["updated_at"] = now or _utc_timestamp()
     return validate_checkpoint_data(updated, updated["request_number"])
+
+
+def prepare_checkpoint_adoption(
+    checkpoint: dict[str, Any], output_hashes: dict[str, str], *, now: str | None = None
+) -> dict[str, Any]:
+    if checkpoint["knowledge"]["status"] != "completed" or not output_hashes:
+        raise ValueError("knowledge 完了後の期待出力 hash が必要です")
+    updated = deepcopy(checkpoint)
+    updated["adoption"] = {"status": "ready", "output_hashes": dict(output_hashes)}
+    updated["updated_at"] = now or _utc_timestamp()
+    return validate_checkpoint_data(updated, updated["request_number"])
+
+
+def inspect_checkpoint_adoption(root: Path, checkpoint: dict[str, Any]) -> str:
+    """期待出力に対する現在値を none、all、partial へ分類する。"""
+    expected = checkpoint["adoption"]["output_hashes"]
+    if not expected:
+        return "none"
+    matching = 0
+    for relative, digest in expected.items():
+        path = root / relative
+        try:
+            if stat.S_ISREG(os.lstat(path).st_mode):
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                matching += actual == digest
+        except OSError:
+            pass
+    if matching == 0:
+        return "none"
+    if matching == len(expected):
+        return "all"
+    return "partial"
 
 
 def checkpoint_knowledge(checkpoint: dict[str, Any]) -> DraftKnowledgeUpdate | None:
@@ -297,10 +328,10 @@ def validate_checkpoint_data(
             raise ValueError(f"{location}/knowledge/sha256 が更新候補と一致しません")
     adoption = _object(value["adoption"], f"{location}/adoption")
     _keys(adoption, {"status", "output_hashes"}, f"{location}/adoption")
-    if adoption["status"] not in {"pending", "adopted"}:
+    if adoption["status"] not in {"pending", "ready", "adopted"}:
         raise ValueError(f"{location}/adoption/status が不正です")
     _hashes(adoption["output_hashes"], f"{location}/adoption/output_hashes")
-    if adoption["status"] == "adopted" and knowledge["status"] != "completed":
+    if adoption["status"] in {"ready", "adopted"} and knowledge["status"] != "completed":
         raise ValueError(f"{location} は knowledge 未完了のまま採用できません")
     return value
 

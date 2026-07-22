@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.draft_checkpoint import (
+    inspect_checkpoint_adoption,
+    load_draft_checkpoint,
+    mark_checkpoint_adopted,
+    write_draft_checkpoint,
+)
 from story_pipeline.execution_store import persist_finished_execution, persist_run_progress
 from story_pipeline.llm_transport import ApiFailure
 from story_pipeline.persistence import atomic_write_text, sha256_file
@@ -89,6 +95,19 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
             for path, content in documents:
                 atomic_write_text(start.root / path, content)
             output_hashes = {path: sha256_file(start.root / path) for path, _ in documents}
+            if workflow.phase == "drafting" and workflow.internal_files:
+                checkpoint = load_draft_checkpoint(start.root, start.request.number)
+                if checkpoint is None or inspect_checkpoint_adoption(start.root, checkpoint) != "all":
+                    raise StoryPipelineError(
+                        "本文、canon、人物状態を同一採用単位として確認できません",
+                        workflow.internal_files[0],
+                        "checkpoint と出力 hash を検証してください",
+                        4,
+                    )
+                checkpoint = mark_checkpoint_adopted(
+                    checkpoint, checkpoint["adoption"]["output_hashes"]
+                )
+                write_draft_checkpoint(start.root, checkpoint)
             changed = tuple(dict.fromkeys((*changed, *output_hashes)))
             run = _finish(start, run, current, "completed", output_hashes=output_hashes, result="採用候補を保存")
         else:
