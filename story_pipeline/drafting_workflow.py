@@ -457,6 +457,8 @@ def _extract_knowledge(
                 "content": (
                     "前回更新候補は出力契約または evidence 検証に失敗しました。"
                     f"次を直した JSON object 全体を再生成してください: {error.reason}"
+                    " evidence が複数回現れる場合は本文の前後を改変せず引用に含めて一意にし、"
+                    "一意な完全一致引用を作れない項目は配列から省いてください。"
                 ),
             })
     return None

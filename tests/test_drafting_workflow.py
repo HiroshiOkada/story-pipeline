@@ -140,6 +140,20 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertEqual([item.purpose for item in resumed.calls], ["knowledge"])
         self.assertIn("CHECKPOINT_REUSED", {item.code for item in resumed.diagnostics})
 
+    def test_knowledge_retry_requires_unique_quote_or_omission(self) -> None:
+        repeated = "同じ言葉。同じ言葉。"
+        client = FakeClient([
+            draft_payload(repeated), evaluation("accept", 5),
+            knowledge("同じ言葉。"), knowledge("同じ言葉。"),
+        ])
+
+        result = produce_draft(self.root, self.request, self.interpretation, 1, client)
+
+        self.assertEqual(result.status, "failed")
+        retry = client.messages[-1][-1]["content"]
+        self.assertIn("前後を改変せず引用に含めて一意", retry)
+        self.assertIn("配列から省いて", retry)
+
     def test_changed_checkpoint_input_regenerates_draft(self) -> None:
         accepted_label = "二人は看板を直し始めた。"
         first = FakeClient([
