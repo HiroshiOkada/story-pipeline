@@ -2,6 +2,8 @@
 
 Story Pipeline は、人間が Markdown で与えた要求を起点に、LLM と協調して小説の構想、設定、構成、話計画、本文、改稿を段階的に制作する CLI です。成果物、状態、実行記録をファイルと Git コミットに残し、要求ごとに人間が方針を修正できます。
 
+初めて利用する方、設定項目や停止時の対処まで確認したい方は、[Story Pipeline 取扱説明書](docs/user-manual.md)を参照してください。
+
 ## 動作要件
 
 - Python 3.12 以上
@@ -64,7 +66,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 - `limits`: 1要求内の生成・検査・改稿・要約回数と変更行数の上限。
 - `request`: HTTP タイムアウトと通信再試行回数。
 
-設定契約とファイル形式の詳細は [`docs/detailed-specification`](docs/detailed-specification/README.md) を参照してください。
+日常の操作方法は[取扱説明書](docs/user-manual.md)、設定契約とファイル形式の厳密な詳細は [`docs/detailed-specification`](docs/detailed-specification/README.md) を参照してください。
 
 ## コマンド
 
