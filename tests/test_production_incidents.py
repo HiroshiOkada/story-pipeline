@@ -99,24 +99,23 @@ class _Response:
 
 
 class ProductionIncidentCharacterizationTest(unittest.TestCase):
-    def test_i01_init_directly_followed_by_run_preflight_is_rejected(self) -> None:
+    def test_i01_init_directly_followed_by_run_preflight_is_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main(("init", str(root))), 0)
 
-            with self.assertRaises(StoryPipelineError) as caught:
-                inspect_run_preconditions(root, load_config(root))
+            preflight = inspect_run_preconditions(root, load_config(root))
 
-            self.assertEqual(caught.exception.exit_code, 5)
-            self.assertEqual(caught.exception.location, ".story-pipeline/state.json")
+            self.assertEqual(preflight.entries, ())
 
-    def test_i02_inferred_standard_target_is_rejected_even_though_scope_does_not_need_it(self) -> None:
+    def test_i02_inferred_standard_target_is_normalized_for_scope(self) -> None:
         response = json.dumps(
             _interpretation(kind="create", targets=["concept.md"]), ensure_ascii=False
         )
-        with self.assertRaisesRegex(StoryPipelineError, "targets/0"):
-            parse_request_interpretation(response, "短編を書いてください。")
+        interpretation = parse_request_interpretation(response, "短編を書いてください。")
+
+        self.assertEqual(interpretation.targets, ())
 
     def test_i03_resume_keeps_obsolete_request_hash(self) -> None:
         original_hash = hashlib.sha256("最初の要求".encode()).hexdigest()

@@ -10,6 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from story_pipeline.concept import CONCEPT_HEADINGS
+from story_pipeline.cli import main
+from story_pipeline.config import load_config
 from story_pipeline.llm_client import CompletionResult
 from story_pipeline.llm_transport import ApiFailure, ChatResponse
 from story_pipeline.run_command import run_command
@@ -58,6 +60,54 @@ class FakeClient:
 
     def complete_role(self, _: str, __: list[dict[str, str]], **___: object) -> CompletionResult:
         return CompletionResult(ChatResponse(next(self.responses), "mock-api", "stop"), "default", 1, ())
+
+
+class InitializedRunCommandIntegrationTest(unittest.TestCase):
+    def test_init_request_edit_and_fake_run_adopt_concept(self) -> None:
+        identity = {
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@example.invalid",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@example.invalid",
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(os.environ, identity):
+            root = Path(temporary_directory)
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(main(("init", str(root))), 0)
+            (root / "requests/0000.md").write_text(
+                "# 要求\n\n短編を書いてください。\n", encoding="utf-8"
+            )
+            inferred = json.loads(interpretation())
+            inferred["kind"] = "create"
+            inferred["targets"] = ["concept.md"]
+            fake = FakeClient(
+                load_config(root),
+                [json.dumps(inferred, ensure_ascii=False), concept(), evaluation("accept")],
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+                    code = run_command(output=io.StringIO(), error_output=io.StringIO())
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 0)
+            self.assertTrue((root / "concept.md").is_file())
+            subjects = subprocess.run(
+                ["git", "-C", str(root), "log", "-3", "--format=%s"],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout.splitlines()
+            self.assertEqual(
+                subjects,
+                [
+                    "Complete request 0000: completed",
+                    "Record request 0000 input",
+                    "Initialize story project",
+                ],
+            )
 
 
 class RunCommandIntegrationTest(unittest.TestCase):

@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -11,6 +13,14 @@ from unittest import mock
 from story_pipeline import __version__
 from story_pipeline.cli import main
 from story_pipeline.scaffold import create_scaffold
+
+
+GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
 
 
 class CliTest(unittest.TestCase):
@@ -46,7 +56,8 @@ class CliTest(unittest.TestCase):
     def test_init_creates_scaffold_and_git_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            code, stdout, stderr = self.invoke("init", str(root))
+            with mock.patch.dict(os.environ, GIT_IDENTITY):
+                code, stdout, stderr = self.invoke("init", str(root))
 
             self.assertEqual(code, 0)
             self.assertIn(str(root.resolve()), stdout)
@@ -66,6 +77,70 @@ class CliTest(unittest.TestCase):
             state = json.loads((root / ".story-pipeline" / "state.json").read_text())
             self.assertEqual(state["schema_version"], 1)
             self.assertEqual(state["phase"], "concept")
+            self.assertEqual(self.git(root, "status", "--short"), "")
+            self.assertEqual(
+                set(self.git(root, "show", "--format=", "--name-only", "HEAD").splitlines()),
+                {
+                    ".gitignore",
+                    ".story-pipeline/state.json",
+                    "requests/0000.md",
+                    "story-pipeline-config.jsonc",
+                },
+            )
+            self.assertEqual(self.git(root, "log", "-1", "--format=%s"), "Initialize story project")
+
+    def test_init_commits_scaffold_in_existing_empty_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.git(root, "init", "-q")
+            self.git(root, "config", "user.name", "Test")
+            self.git(root, "config", "user.email", "test@example.invalid")
+
+            code, _, stderr = self.invoke("init", str(root))
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr, "")
+            self.assertEqual(self.git(root, "status", "--short"), "")
+            self.assertTrue(self.git(root, "rev-parse", "--verify", "HEAD"))
+
+    def test_init_commit_failure_keeps_scaffold_and_unstages_our_paths(self) -> None:
+        missing_identity = {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_AUTHOR_NAME": "",
+            "GIT_AUTHOR_EMAIL": "",
+            "GIT_COMMITTER_NAME": "",
+            "GIT_COMMITTER_EMAIL": "",
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with mock.patch.dict(os.environ, missing_identity):
+                code, stdout, stderr = self.invoke("init", str(root))
+
+            self.assertEqual(code, 5)
+            self.assertEqual(stdout, "")
+            self.assertIn("user.name", stderr)
+            self.assertIn("手動で commit", stderr)
+            self.assertTrue((root / "story-pipeline-config.jsonc").is_file())
+            self.assertEqual(self.git(root, "diff", "--cached", "--name-only"), "")
+
+    def test_init_rejects_existing_index_changes_without_modifying_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.git(root, "init", "-q")
+            staged = root / "staged.txt"
+            staged.write_text("preserve\n", encoding="utf-8")
+            self.git(root, "add", "staged.txt")
+            staged.unlink()
+            before = self.git(root, "status", "--short")
+
+            code, stdout, stderr = self.invoke("init", str(root))
+
+            self.assertEqual(code, 5)
+            self.assertEqual(stdout, "")
+            self.assertIn("Git repository に差分", stderr)
+            self.assertEqual(self.git(root, "status", "--short"), before)
+            self.assertFalse((root / "story-pipeline-config.jsonc").exists())
 
     def test_init_rejects_nonempty_directory_without_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -99,6 +174,16 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 4)
             self.assertIn("存在しません", stderr)
             self.assertFalse(missing.exists())
+
+    @staticmethod
+    def git(root: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
 
 
 class ScaffoldTest(unittest.TestCase):
