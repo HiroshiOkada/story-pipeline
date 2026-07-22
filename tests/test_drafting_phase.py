@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from story_pipeline.drafting import (
+    DEFAULT_DRAFTING_CONTEXT,
+    EPISODE_HEADINGS,
+    build_drafting_context,
+    draft_generation_response_format,
+    parse_draft_candidate,
+)
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.request_interpretation import parse_request_interpretation
+from story_pipeline.request_selection import select_request
+from story_pipeline.scaffold import create_scaffold
+from story_pipeline.state import load_state
+
+
+class DraftingPhaseTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        create_scaffold(self.root)
+        (self.root / "requests" / "0000.md").write_text(
+            "# 作品作成要求\n\n次の話を執筆してください。\n", encoding="utf-8"
+        )
+        for path in DEFAULT_DRAFTING_CONTEXT:
+            (self.root / path).write_text(f"# {path}\n\n採用済み内容\n", encoding="utf-8")
+        for number in (1, 2, 3):
+            (self.root / "episode_plans" / f"{number:04d}.md").write_text(
+                f"# 第{number}話計画\n\n## 目標文字数\n100字\n", encoding="utf-8"
+            )
+        (self.root / "episodes" / "0001.md").write_text(
+            "## 話タイトル\n再会\n\n## 本文\n二人は再会した。\n", encoding="utf-8"
+        )
+        self.request = select_request(self.root, load_state(self.root))
+        self.interpretation = parse_request_interpretation(
+            json.dumps({
+                "kind": "continue", "summary": "第2話を執筆する", "targets": [],
+                "required_conditions": ["友情"], "prohibited_changes": ["夢落ち"],
+                "additional_material": [], "decision_answers": [], "ambiguities": [],
+                "requested_units": 1, "requested_until": None,
+            }, ensure_ascii=False),
+            self.request.content,
+        )
+
+    def test_builds_context_with_plan_previous_episode_and_next_plan(self) -> None:
+        context = build_drafting_context(self.root, self.request, self.interpretation, 2)
+        self.assertEqual(context.plan_path, "episode_plans/0002.md")
+        self.assertEqual(context.previous_episode_path, "episodes/0001.md")
+        self.assertEqual(context.next_plan_path, "episode_plans/0003.md")
+        self.assertEqual(context.target_length, 100)
+        for path in (*DEFAULT_DRAFTING_CONTEXT, "episode_plans/0002.md", "episodes/0001.md", "episode_plans/0003.md"):
+            digest = hashlib.sha256((self.root / path).read_bytes()).hexdigest()
+            self.assertIn(f"path={path} sha256={digest}", context.messages[3]["content"])
+
+    def test_candidate_contract_rejects_path_for_another_episode(self) -> None:
+        candidate = parse_draft_candidate(
+            json.dumps({"path": "episodes/0002.md", "content": "本文"}),
+            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+        )
+        self.assertEqual(candidate.path, "episodes/0002.md")
+        with self.assertRaises(StoryPipelineError):
+            parse_draft_candidate(
+                json.dumps({"path": "episodes/0003.md", "content": "本文"}),
+                episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+            )
+
+    def test_generation_prompt_and_schema_pin_headings_target_and_length(self) -> None:
+        context = build_drafting_context(self.root, self.request, self.interpretation, 2)
+        for heading in EPISODE_HEADINGS:
+            self.assertIn(heading, context.messages[0]["content"])
+        self.assertIn("100字", context.messages[-1]["content"])
+        schema = draft_generation_response_format(2)["json_schema"]["schema"]
+        self.assertEqual(schema["properties"]["path"]["const"], "episodes/0002.md")
+        self.assertFalse(schema["additionalProperties"])
+
+
+if __name__ == "__main__":
+    unittest.main()
