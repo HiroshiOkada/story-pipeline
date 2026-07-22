@@ -1,0 +1,231 @@
+"""要求実行記録の生成と状態遷移。"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any, Literal
+
+
+RunStatus = Literal["completed", "failed", "awaiting_human"]
+StepStatus = Literal["completed", "failed", "skipped"]
+CALL_CATEGORIES = {"generation", "review", "revision", "summary"}
+
+
+def utc_timestamp() -> str:
+    """現在時刻を秒精度の UTC RFC 3339 形式で返す。"""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def create_run_record(
+    request_number: int,
+    request_sha256: str,
+    start_commit: str,
+    *,
+    restored_files: tuple[str, ...] = (),
+    now: str | None = None,
+) -> dict[str, Any]:
+    """開始時コミット後に保存する新規 running 記録を作る。"""
+    if not 0 <= request_number <= 9999:
+        raise ValueError("request_number は 0..9999 である必要があります")
+    _require_hash(request_sha256)
+    _require_commit(start_commit)
+    timestamp = now or utc_timestamp()
+    return {
+        "schema_version": 1,
+        "request_number": request_number,
+        "status": "running",
+        "started_at": timestamp,
+        "updated_at": timestamp,
+        "finished_at": None,
+        "request_sha256": request_sha256,
+        "start_commit": start_commit,
+        "end_commit": None,
+        "current_step": "interpret_request",
+        "steps": [],
+        "call_counts": {
+            "generation": 0,
+            "review": 0,
+            "revision": 0,
+            "summary": 0,
+        },
+        "model_attempts": [],
+        "input_hashes": {},
+        "output_hashes": {},
+        "restored_files": list(restored_files),
+        "fallbacks": [],
+        "errors": [],
+        "resume": None,
+    }
+
+
+def resume_run_record(
+    run: dict[str, Any],
+    *,
+    step: str,
+    reason: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """failed 記録を running に戻し、最初の開始時刻と累積値を保つ。"""
+    if run.get("status") != "failed":
+        raise ValueError("failed の実行記録だけを再開できます")
+    updated = deepcopy(run)
+    updated["status"] = "running"
+    updated["finished_at"] = None
+    updated["updated_at"] = now or utc_timestamp()
+    updated["current_step"] = step
+    updated["resume"] = {"step": step, "reason": reason}
+    return updated
+
+
+def start_step(
+    run: dict[str, Any],
+    identifier: str,
+    *,
+    input_hashes: dict[str, str] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """新しい工程を running として開始する。"""
+    _require_running(run)
+    if not identifier or any(item["id"] == identifier for item in run["steps"]):
+        raise ValueError("工程 ID は空でない一意な値である必要があります")
+    hashes = dict(input_hashes or {})
+    _require_hashes(hashes)
+    timestamp = now or utc_timestamp()
+    updated = deepcopy(run)
+    updated["steps"].append(
+        {
+            "id": identifier,
+            "status": "running",
+            "started_at": timestamp,
+            "finished_at": None,
+            "input_hashes": hashes,
+            "output_hashes": {},
+            "result": None,
+        }
+    )
+    updated["current_step"] = identifier
+    updated["updated_at"] = timestamp
+    updated["input_hashes"].update(hashes)
+    return updated
+
+
+def finish_step(
+    run: dict[str, Any],
+    identifier: str,
+    status: StepStatus,
+    *,
+    output_hashes: dict[str, str] | None = None,
+    result: str | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """running 工程を完了、失敗、または省略として確定する。"""
+    if status not in {"completed", "failed", "skipped"}:
+        raise ValueError("工程の終了 status が不正です")
+    hashes = dict(output_hashes or {})
+    _require_hashes(hashes)
+    updated = deepcopy(run)
+    matching = [item for item in updated["steps"] if item["id"] == identifier]
+    if len(matching) != 1 or matching[0]["status"] != "running":
+        raise ValueError("running の対象工程が一意に存在しません")
+    timestamp = now or utc_timestamp()
+    step = matching[0]
+    step["status"] = status
+    step["finished_at"] = timestamp
+    step["output_hashes"] = hashes
+    step["result"] = result
+    updated["updated_at"] = timestamp
+    updated["output_hashes"].update(hashes)
+    return updated
+
+
+def record_model_attempt(
+    run: dict[str, Any],
+    *,
+    category: str,
+    role: str,
+    model_reference: str,
+    api_model: str,
+    started_at: str,
+    finished_at: str,
+    result: str,
+    attempts: int = 1,
+    token_count: int | None = None,
+    fallbacks: tuple[dict[str, str], ...] = (),
+) -> dict[str, Any]:
+    """秘密や応答本文を含めず、論理 LLM 呼び出しを累積記録する。"""
+    if category not in CALL_CATEGORIES:
+        raise ValueError("呼び出し category が不正です")
+    if attempts < 1 or token_count is not None and token_count < 0:
+        raise ValueError("呼び出し回数または token_count が不正です")
+    updated = deepcopy(run)
+    updated["call_counts"][category] += 1
+    updated["model_attempts"].append(
+        {
+            "category": category,
+            "role": role,
+            "model_reference": model_reference,
+            "api_model": api_model,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "result": result,
+            "attempts": attempts,
+            "token_count": token_count,
+        }
+    )
+    updated["fallbacks"].extend(deepcopy(list(fallbacks)))
+    updated["updated_at"] = finished_at
+    return updated
+
+
+def finalize_run_record(
+    run: dict[str, Any],
+    status: RunStatus,
+    *,
+    resume_step: str | None = None,
+    resume_reason: str | None = None,
+    error: dict[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """running 記録を終了状態へ遷移させる。"""
+    _require_running(run)
+    if status not in {"completed", "failed", "awaiting_human"}:
+        raise ValueError("実行の終了 status が不正です")
+    if status == "failed" and (not resume_step or not resume_reason):
+        raise ValueError("failed には再開位置と理由が必要です")
+    timestamp = now or utc_timestamp()
+    updated = deepcopy(run)
+    updated["status"] = status
+    updated["updated_at"] = timestamp
+    updated["finished_at"] = timestamp
+    updated["resume"] = (
+        {"step": resume_step, "reason": resume_reason}
+        if status == "failed"
+        else None
+    )
+    if error is not None:
+        required = {"step", "category", "message", "retryable"}
+        if set(error) != required:
+            raise ValueError("error のキーが不正です")
+        updated["errors"].append({**deepcopy(error), "occurred_at": timestamp})
+    return updated
+
+
+def _require_running(run: dict[str, Any]) -> None:
+    if run.get("status") != "running":
+        raise ValueError("running の実行記録が必要です")
+
+
+def _require_hashes(hashes: dict[str, str]) -> None:
+    for value in hashes.values():
+        _require_hash(value)
+
+
+def _require_hash(value: str) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("SHA-256 は小文字64桁の16進数である必要があります")
+
+
+def _require_commit(value: str) -> None:
+    if len(value) not in {40, 64} or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("Git object ID は完全な16進数である必要があります")
