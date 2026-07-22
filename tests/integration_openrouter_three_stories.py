@@ -53,7 +53,10 @@ def main(arguments: list[str] | None = None) -> int:
     output = Path(values[1]).resolve()
     started = datetime.now(timezone.utc)
     results: list[dict[str, Any]] = []
-    cumulative = Decimal()
+    prior_cost = Decimal(os.environ.get("STORY_PIPELINE_VALIDATION_PRIOR_COST_USD", "0"))
+    if prior_cost < 0 or prior_cost > Decimal("5.00"):
+        raise RuntimeError("prior cost must be between USD 0 and USD 5.00")
+    cumulative = prior_cost
     with tempfile.TemporaryDirectory(prefix="story-pipeline-production-") as directory:
         temporary = Path(directory)
         command, environment = _install_wheel(temporary, wheel)
@@ -119,6 +122,7 @@ def main(arguments: list[str] | None = None) -> int:
         "model": MODEL,
         "stories_completed": len(results),
         "passed": len(results) == len(STORIES) and all(item["passed"] for item in results),
+        "prior_cost_usd": str(prior_cost),
         "total_cost_usd": str(cumulative),
         "results": results,
     }
