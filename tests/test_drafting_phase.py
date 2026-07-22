@@ -12,7 +12,9 @@ from story_pipeline.drafting import (
     build_drafting_context,
     check_draft_candidate,
     draft_generation_response_format,
+    draft_evaluation_response_format,
     parse_draft_candidate,
+    parse_draft_evaluation,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -105,6 +107,32 @@ class DraftingPhaseTest(unittest.TestCase):
         self.assertIn("HEADING_ORDER", codes)
         self.assertIn("UNKNOWN_HEADING", codes)
         self.assertIn("LENGTH_OUT_OF_RANGE", codes)
+
+    def test_evaluation_requires_draft_scores_and_error_blocks_adoption(self) -> None:
+        value = {
+            "decision": "accept", "summary": "採用可能", "issues": [],
+            "scores": {
+                "request_fit": 5, "consistency": 5, "plan_fit": 5,
+                "episode_completion": 5, "style_fit": 4, "readability": 4,
+            },
+        }
+        self.assertTrue(parse_draft_evaluation(json.dumps(value)).adoptable)
+        value["issues"] = [{
+            "severity": "error", "category": "continuity", "location": "## 本文",
+            "evidence": "直前話の終了状態と矛盾する", "instruction": "開始状態を合わせる",
+        }]
+        self.assertFalse(parse_draft_evaluation(json.dumps(value)).adoptable)
+        del value["scores"]["consistency"]
+        with self.assertRaises(StoryPipelineError):
+            parse_draft_evaluation(json.dumps(value))
+
+    def test_evaluation_schema_requires_consistency_plan_and_completion(self) -> None:
+        schema = draft_evaluation_response_format()["json_schema"]["schema"]
+        self.assertEqual(
+            set(schema["properties"]["scores"]["required"]),
+            {"request_fit", "consistency", "plan_fit", "episode_completion", "style_fit", "readability"},
+        )
+        self.assertFalse(schema["additionalProperties"])
 
 
 if __name__ == "__main__":

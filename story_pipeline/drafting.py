@@ -321,6 +321,67 @@ def check_draft_candidate(
     return DraftMechanicalCheck(path, normalized, character_count, target_length, tuple(issues))
 
 
+def parse_draft_evaluation(content: str) -> DraftEvaluation:
+    """共通評価契約と本文採用に必要な score を検証する。"""
+    value = validate_evaluation(content)
+    required_scores = {
+        "request_fit", "consistency", "plan_fit", "episode_completion",
+        "style_fit", "readability",
+    }
+    missing = required_scores - value["scores"].keys()
+    if missing:
+        raise _drafting_format_error(f"本文評価に必須 score がありません: {sorted(missing)[0]}")
+    issues = tuple(
+        DraftEvaluationIssue(
+            item["severity"], item["category"], item["location"],
+            item["evidence"], item["instruction"],
+        )
+        for item in value["issues"]
+    )
+    return DraftEvaluation(
+        value["decision"], value["summary"], issues, tuple(sorted(value["scores"].items()))
+    )
+
+
+def draft_evaluation_response_format() -> dict[str, Any]:
+    """reviewer へ渡す厳格な本文評価 JSON Schema。"""
+    issue = {
+        "type": "object", "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            "category": {"type": "string"}, "location": {"type": "string"},
+            "evidence": {"type": "string"}, "instruction": {"type": "string"},
+        },
+    }
+    required_scores = (
+        "request_fit", "consistency", "plan_fit", "episode_completion",
+        "style_fit", "readability",
+    )
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["decision", "summary", "issues", "scores"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["accept", "revise", "awaiting_human"]},
+            "summary": {"type": "string"},
+            "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 5},
+                "required": list(required_scores),
+                "properties": {
+                    name: {"type": "integer", "minimum": 1, "maximum": 5}
+                    for name in required_scores
+                },
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "draft_evaluation", "strict": True, "schema": schema},
+    }
+
+
 def _looks_like_json_body(body: str) -> bool:
     stripped = body.strip()
     if not stripped or stripped[0] not in "[{":
