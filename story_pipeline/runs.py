@@ -359,9 +359,11 @@ def _validate_recorded_hashes(
 ) -> None:
     request = f"requests/{run['request_number']:04d}.md"
     _check_hash(root, request, run["request_sha256"], "REQUEST_HASH", collector)
-    for section in ("input_hashes", "output_hashes"):
-        for relative, expected in run[section].items():
+    for relative, expected in run["input_hashes"].items():
+        if relative not in run["output_hashes"]:
             _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
+    for relative, expected in run["output_hashes"].items():
+        _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
 
 
 def _check_hash(

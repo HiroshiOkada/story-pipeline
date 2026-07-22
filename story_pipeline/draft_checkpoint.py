@@ -185,7 +185,7 @@ def validate_draft_checkpoints(
                 "CHECKPOINT_ADOPTED_OUTPUT_MISMATCH", "採用済み checkpoint の出力 hash が一致しません", relative
             )
         for path, expected in checkpoint["input_hashes"].items():
-            if path == "request_interpretation":
+            if path == "request_interpretation" or path in checkpoint["adoption"]["output_hashes"]:
                 continue
             try:
                 target = root / path
