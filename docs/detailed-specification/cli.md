@@ -43,10 +43,11 @@ story-pipeline validate
 
 1. 対象パスを検証する。
 2. 初期化済み、空、`.git` だけ、その他の空でない状態に分類する。
-3. 作成予定パスを検査し、競合がないことを確認する。
-4. scaffold を作成する。
-5. Git リポジトリでなければ `git init` する。
-6. 作品ルートと次の操作を表示する。
+3. 既存 Git repository であれば、作品ルートと Git ルートの一致、進行中操作の不在、worktree と index に差分がないことを副作用なしで検査する。
+4. 作成予定パスを検査し、scaffold を作成する。
+5. Git repository でなければ `git init` する。
+6. `.gitignore`、`.story-pipeline/state.json`、`requests/0000.md`、`story-pipeline-config.jsonc` だけを stage し、予定集合と index の完全一致を確認して `Initialize story project` commit を作成する。
+7. HEAD が存在し worktree が clean な状態で、作品ルートと次の操作を表示する。
 
 成功時の最小出力は次の形式とする。
 
@@ -56,11 +57,11 @@ Next request: requests/0000.md
 Run: story-pipeline run
 ```
 
-既に初期化済みなら変更せず、設定ファイルのパスを示して `4` で終了する。空でない未初期化ディレクトリも変更せず、空のディレクトリを指定するよう案内して `4` とする。
+既に初期化済みなら変更せず、設定ファイルのパスを示して `4` で終了する。空でない未初期化ディレクトリも変更せず、空のディレクトリを指定するよう案内して `4` とする。既存 Git 差分は一切変更せず `5` で停止する。Git identity 不足または commit 失敗時は、今回 stage した scaffold を index から外し、作成済みファイルを保持したまま `5` で停止して identity 設定と手動 commit を案内する。
 
 ### 3.3 副作用
 
-scaffold と、必要な場合の `.git` だけを作成する。コミット、API 接続、要求処理は行わない。
+scaffold と、必要な場合の `.git`、初期 commit を作成する。API 接続と要求処理は行わない。
 
 ## 4. `run`
 

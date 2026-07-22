@@ -91,6 +91,8 @@
 - 対象に `story-pipeline-config.jsonc` があれば初期化済みと判定し、上書きしない。
 - 対象が空、または `.git` だけを含む場合に scaffold を作成できる。
 - それ以外の空でない未初期化ディレクトリでは、変更せずに終了する。
+- 既存 Git repository の差分を変更せず、scaffold の既知4ファイルだけを `Initialize story project` commit に保存する。
+- Git identity 不足や commit 失敗時は scaffold を保持し、今回の stage を外して復旧方法を案内する。
 - 親ディレクトリに別作品の設定があっても、`init` の対象判定には使用しない。
 
 ## 7. 互換性

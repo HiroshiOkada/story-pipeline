@@ -14,7 +14,18 @@ episodes/
 .gitignore
 ```
 
-ディレクトリとファイルの作成に途中で失敗した場合、今回作成したパスだけを削除して開始前の状態へ戻す。既存パスは削除・変更しない。Git リポジトリでなければ、全ファイルの作成成功後に `git init` を実行する。初期コミットは作成しない。
+ディレクトリとファイルの作成に途中で失敗した場合、今回作成したパスだけを削除して開始前の状態へ戻す。既存パスは削除・変更しない。Git repository でなければ、全ファイルの作成成功後に `git init` を実行する。
+
+scaffold 作成後は、次の4ファイルだけを `Initialize story project` commit に保存する。
+
+```text
+.gitignore
+.story-pipeline/state.json
+requests/0000.md
+story-pipeline-config.jsonc
+```
+
+commit 失敗時は scaffold を削除せず、今回 stage したパスだけを index から外して手動復旧を案内する。
 
 `.gitignore` が新規作成される場合の内容は次のとおりとする。
 

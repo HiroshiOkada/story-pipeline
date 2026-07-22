@@ -90,7 +90,17 @@ CLI 開始前から staged されている変更が 1 件でもあれば、対�
 
 コミットごとに対象パスを明示して stage する。`git add .`、`git add -A`、ディレクトリ単位の add を使用しない。stage 後に index のパス一覧を取得し、予定集合と完全一致しなければ commit せず停止する。
 
-### 5.2 開始時コミット
+### 5.2 初期 commit
+
+`init` は `.gitignore`、`.story-pipeline/state.json`、`requests/0000.md`、`story-pipeline-config.jsonc` の既知パス4件だけを stage し、index との完全一致を確認して次の commit を作成する。
+
+```text
+Initialize story project
+```
+
+既存の空 Git repository は scaffold 作成前に差分と進行中操作がないことを検査する。初期 commit が失敗した場合は今回 stage したパスだけを外し、scaffold を保持して Git identity の設定と手動 commit を案内する。
+
+### 5.3 開始時コミット
 
 対象は、変更のある処理要求、設定、許可済み追加資料だけとする。変更がなければ空コミットを作らない。形式は次とする。
 
@@ -100,7 +110,7 @@ Record request NNNN input
 
 本文が必要な場合は `Additional material: path` をパスごとに記す。要求番号は4桁で表示する。
 
-### 5.3 終了時コミット
+### 5.4 終了時コミット
 
 対象は今回の実行で作成・変更した管理ファイルだけとする。開始前から存在した想定外変更を含めない。形式は次とする。
 
