@@ -54,6 +54,35 @@ def atomic_write_text(path: Path, content: str) -> None:
                 pass
 
 
+def atomic_create_text(path: Path, content: str) -> None:
+    """既存パスを上書きせず、UTF-8 テキストを排他的に作成する。"""
+    parent = path.parent
+    _require_directory(parent)
+    descriptor: int | None = None
+    created = False
+    completed = False
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        created = True
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            descriptor = None
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _sync_directory(parent)
+        completed = True
+    except (OSError, UnicodeError) as error:
+        raise _io_error("ファイルを排他的に作成できません", path) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created and not completed:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 def sha256_file(path: Path) -> str:
     """安全な通常ファイルの生バイト列に対する SHA-256 を返す。"""
     try:
