@@ -121,6 +121,18 @@ class EvaluatedFinalRevision:
         return 0 if self.candidate is None else self.candidate.revision_count
 
 
+@dataclass(frozen=True, slots=True)
+class FinalCompletionUpdate:
+    phase: str
+    completed_chapters: tuple[int, ...]
+    completed_episodes: tuple[int, ...]
+    current_chapter: None
+    pending_reviews: tuple[object, ...]
+    pending_decisions: tuple[object, ...]
+    reason: str
+    remaining_notes: tuple[FinalRevisionIssue, ...]
+
+
 def build_final_revision_context(
     root: Path,
     request: SelectedRequest,
@@ -442,6 +454,35 @@ def select_best_final_revision(
         sum(score for _, score in item.evaluation.scores),
         -item.revision_count,
     ))
+
+
+def build_final_completion_update(
+    context: FinalRevisionContext,
+    accepted: EvaluatedFinalRevision,
+    *,
+    completed_chapters: tuple[int, ...],
+    completed_episodes: tuple[int, ...],
+    pending_reviews: tuple[object, ...] = (),
+    pending_decisions: tuple[object, ...] = (),
+) -> FinalCompletionUpdate:
+    """全成果物と未解決事項を検証し、completed 状態への更新候補を作る。"""
+    if not accepted.evaluation.adoptable:
+        raise ValueError("明示的に完成判定された採用候補が必要です")
+    expected_chapters = tuple(int(Path(path).stem) for path in context.chapter_paths)
+    expected_episodes = tuple(int(Path(path).stem) for path in context.episode_paths)
+    if tuple(sorted(set(completed_chapters))) != expected_chapters:
+        raise ValueError("completed_chapters が作品内の全章と一致しません")
+    if tuple(sorted(set(completed_episodes))) != expected_episodes:
+        raise ValueError("completed_episodes が作品内の全話と一致しません")
+    if pending_reviews:
+        raise ValueError("未完了 review がある作品は completed にできません")
+    if pending_decisions:
+        raise ValueError("未解決 decision がある作品は completed にできません")
+    notes = tuple(issue for issue in accepted.evaluation.issues if issue.severity != "error")
+    return FinalCompletionUpdate(
+        "completed", expected_chapters, expected_episodes, None, (), (),
+        accepted.evaluation.reason, notes,
+    )
 
 
 def _parse_human_decision(value: Any) -> FinalHumanDecision | None:

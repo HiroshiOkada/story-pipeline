@@ -13,6 +13,7 @@ from story_pipeline.final_revision import (
     FINAL_SCORE_NAMES,
     build_final_revision_context,
     build_final_revision_messages,
+    build_final_completion_update,
     check_final_revision_candidate,
     final_evaluation_response_format,
     parse_final_evaluation,
@@ -182,6 +183,35 @@ class FinalRevisionContextTest(unittest.TestCase):
         original = EvaluatedFinalRevision(None, (), evaluation)
         revised = EvaluatedFinalRevision(candidate, (), evaluation)
         self.assertIs(select_best_final_revision((revised, original)), original)
+
+    def test_completion_update_requires_all_artifacts_and_no_pending_items(self) -> None:
+        context = build_final_revision_context(
+            self.root, self.request, self.interpretation, max_full_text_characters=10_000
+        )
+        evaluation = parse_final_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "結末まで成立", "summary": "完成",
+            "issues": [{
+                "severity": "note", "category": "style", "location": "episodes/0002.md",
+                "evidence": "簡潔", "instruction": "好みの範囲",
+            }], "scores": {name: 5 for name in FINAL_SCORE_NAMES}, "human_decision": None,
+        }, ensure_ascii=False))
+        documents = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        accepted = EvaluatedFinalRevision(None, documents, evaluation)
+        update = build_final_completion_update(
+            context, accepted, completed_chapters=(1, 2), completed_episodes=(1, 2, 3, 4)
+        )
+        self.assertEqual(update.phase, "completed")
+        self.assertIsNone(update.current_chapter)
+        self.assertEqual(len(update.remaining_notes), 1)
+        with self.assertRaises(ValueError):
+            build_final_completion_update(
+                context, accepted, completed_chapters=(1,), completed_episodes=(1, 2, 3, 4)
+            )
+        with self.assertRaises(ValueError):
+            build_final_completion_update(
+                context, accepted, completed_chapters=(1, 2), completed_episodes=(1, 2, 3, 4),
+                pending_decisions=({"id": "decision"},),
+            )
 
 
 if __name__ == "__main__":
