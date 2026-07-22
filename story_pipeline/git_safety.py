@@ -28,6 +28,25 @@ class GitPreflight:
 
 def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPreflight:
     """利用者の状態を変えずに `run` の Git 前提を検査する。"""
+    validate_run_repository(root)
+    dotenv = _configured_dotenv_paths(root, config)
+    entries = read_worktree(root)
+    for entry in entries:
+        path = entry.normalized_path()
+        if entry.kind == "ignored":
+            continue
+        if entry.kind == "unmerged":
+            raise _git_error("競合を解消する必要があります", path)
+        if entry.index_status not in {".", "?"}:
+            raise _git_error("stage 済み変更があります", path)
+        if entry.kind == "untracked" and classify_path(path, dotenv) == "managed":
+            raise _git_error("未追跡の CLI 管理ファイルがあります", path)
+    _inspect_index_flags(root, dotenv)
+    return GitPreflight(tuple(entries), frozenset(dotenv))
+
+
+def validate_run_repository(root: Path) -> None:
+    """ロック取得前に Git repository と進行中操作だけを検証する。"""
     top_level = _git_text(root, ["rev-parse", "--show-toplevel"])
     if top_level is None or Path(top_level).resolve() != root.resolve():
         raise _git_error("作品ルートと Git ワークツリーのルートが一致しません", root)
@@ -42,18 +61,13 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
         issue = operations.issues[0]
         raise _git_error(issue.message, issue.location or root)
 
-    dotenv = _configured_dotenv_paths(root, config)
-    entries = read_worktree(root)
-    for entry in entries:
-        path = entry.normalized_path()
-        if entry.kind == "unmerged":
-            raise _git_error("競合を解消する必要があります", path)
-        if entry.index_status not in {".", "?"}:
-            raise _git_error("stage 済み変更があります", path)
-        if entry.kind == "untracked" and classify_path(path, dotenv) == "managed":
-            raise _git_error("未追跡の CLI 管理ファイルがあります", path)
-    _inspect_index_flags(root, dotenv)
-    return GitPreflight(tuple(entries), frozenset(dotenv))
+
+def current_commit(root: Path) -> str:
+    """現在の HEAD object ID を安全な開始境界として返す。"""
+    commit = _git_text(root, ["rev-parse", "HEAD"])
+    if commit is None:
+        raise _git_error("現在の commit を確認できません", root)
+    return commit
 
 
 def restore_managed_files(root: Path, preflight: GitPreflight, output: TextIO) -> tuple[str, ...]:
