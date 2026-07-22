@@ -246,6 +246,10 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
             }
             if completion.response.usage is not None else None
         ),
+        truncated=any(
+            item.failure_kind == "output_truncated"
+            for item in completion.transport_attempts
+        ),
     )
     persist_run_progress(start.root, updated)
     return updated
