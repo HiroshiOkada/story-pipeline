@@ -23,6 +23,9 @@ def migrate_state_command(root: Path, output: TextIO) -> int:
     state = load_state(root)
     if state["active_request"] is not None:
         raise _migration_error("active request の実行中は状態を移行できません", "/active_request")
+    lock_path = root / ".story-pipeline/run.lock"
+    if lock_path.exists() or lock_path.is_symlink():
+        raise _migration_error("実行ロックがある間は状態を移行できません", ".story-pipeline/run.lock")
     preflight = inspect_run_preconditions(root, config)
     _require_migration_worktree(root, preflight.entries)
     structure = load_story_structure(root)

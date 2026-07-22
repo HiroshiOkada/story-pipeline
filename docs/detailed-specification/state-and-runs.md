@@ -63,13 +63,21 @@ ID は要求内で一意とし、解決済み判断は配列から除く。解�
 
 ### 2.2 整合条件
 
-- `next_chapter` と `next_episode` はそれぞれ完了済み最大番号より大きい。
+- `completed_chapters` と `completed_episodes` は章・話対応表の連続した prefix である。
+- `episode_planning` と `drafting` の `current_chapter` / `next_chapter` は最初の未完了章、`next_episode` はその章の最初の未完了話を指す。
+- 現在章の全話が完了したら `phase=chapter_revision` とし、`current_chapter` を維持する。
+- 章改稿完了後、未完了章があればその章へ進み、全章完了なら `phase=final_revision`、`current_chapter=null` とする。
+- 最終番号9999以外では、次の予定対象がない場合の sentinel は作品内最大番号+1とする。9999は終端 phase でだけ同値 sentinel として許可する。
 - 完了済み番号には対応する章または本文ファイルが存在する。
 - `completed` では未完了の review と decision がなく、`active_request` は `null` である。
 - `active_request` が非 `null` なら同番号の実行記録が存在し、その状態は `running` または `failed` である。人間確認待ちの要求は終了済みとし、後続要求で回答するため active に残さない。
 - `last_request` は存在する実行記録の最大番号以下である。要求は番号順に処理するため、通常は最大番号と一致する。
 
 scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、request と current chapter は `null` とする。
+
+### 2.3 章・話対応表
+
+全 `chapters/NNNN.md` の `## 収録話` を章番号順に解析する。`0001` の単独番号と `0001-0003`、`0001〜0003` の範囲を許可する。章番号、章内話番号、章間話番号はすべて1始まり、昇順、一意、連続でなければならない。重複、欠落、逆順、範囲の逆転は該当する `chapters/NNNN.md ## 収録話` を location として拒否する。
 
 ## 3. `runs/NNNN.json`
 

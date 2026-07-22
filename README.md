@@ -73,6 +73,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 | `story-pipeline init [PATH]` | 空のディレクトリに作品プロジェクトと検証済み初期 commit を作成します。 |
 | `story-pipeline status` | 現在のフェーズと次の標準処理を副作用なしで表示します。 |
 | `story-pipeline validate` | 設定、状態、成果物、Git の整合性を API 呼び出しなしで検査します。 |
+| `story-pipeline migrate-state` | 章・話対応表と既存本文を検証し、旧実装の誤った制作状態を明示的に移行します。 |
 | `story-pipeline run` | 最若番号の未処理要求を1件処理します。 |
 
 ## 安全な運用
@@ -85,6 +86,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 - 終了ステータスが `awaiting_human` の場合は、報告の判断 ID を確認して次の要求に回答します。
 - 終了ステータスが `failed` の場合は、空の次要求を残したまま同じ要求を再実行できます。失敗原因に合わせて元の要求を直した場合、その内容は改訂履歴と入力 commit に記録されます。次要求へ具体的な内容を書いた場合は、改訂か新規要求かを決めるまで安全停止します。
 - 本文評価後に knowledge 更新だけが失敗した場合、検証済み本文は内部 checkpoint に保存され、次回は本文を再生成せず knowledge 工程から再開します。checkpoint や作品ファイルを手動変更した場合は `validate` で確認してください。
+- 旧バージョンで章内最終話の後も次話計画を指している場合は、作業ツリーを整理して `story-pipeline migrate-state` を実行します。作品本文は変更せず、状態変更だけを専用 commit に保存します。
 
 ## 開発者向け検証
 

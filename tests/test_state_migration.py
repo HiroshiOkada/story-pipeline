@@ -70,11 +70,33 @@ class StateMigrationTest(unittest.TestCase):
             before = state_path.read_bytes()
             (root / "notes.txt").write_text("dirty\n")
 
-            with patch("story_pipeline.project.Path.cwd", return_value=root):
+            with (
+                patch("story_pipeline.project.Path.cwd", return_value=root),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
                 code = main(("migrate-state",))
 
             self.assertEqual(code, 5)
             self.assertEqual(state_path.read_bytes(), before)
+
+    def test_rejects_run_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            create_scaffold(root)
+            (root / ".story-pipeline/run.lock").write_text("{}\n")
+            self.git(root, "init", "-q")
+            self.git(root, "config", "user.name", "Test")
+            self.git(root, "config", "user.email", "test@example.invalid")
+            self.git(root, "add", ".")
+            self.git(root, "commit", "-q", "-m", "Initial")
+
+            with (
+                patch("story_pipeline.project.Path.cwd", return_value=root),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                code = main(("migrate-state",))
+
+            self.assertEqual(code, 5)
 
     @staticmethod
     def git(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
