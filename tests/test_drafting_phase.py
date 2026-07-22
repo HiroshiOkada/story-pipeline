@@ -221,7 +221,28 @@ class DraftingPhaseTest(unittest.TestCase):
         payload["canon_facts"][0]["evidence"] = "本文にない事実"
         with self.assertRaises(StoryPipelineError):
             parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
-        payload["canon_facts"][0]["evidence"] = "潮風"
+
+    def test_knowledge_evidence_resolves_whitespace_to_original_text(self) -> None:
+        candidate = DraftCandidate(
+            "episodes/0001.md",
+            "## 話タイトル\n潮風\n\n## 本文\n凪は古い看板を\n二人で直した。凪は笑った。\n",
+            1, 1, "writer", (),
+        )
+        payload = {
+            "canon_facts": [{
+                "fact": "二人で看板を直した",
+                "evidence": "凪は 古い看板を二人で 直した。",
+                "source": "episodes/0001.md",
+                "established_at": "第0001話",
+                "people": ["凪"],
+            }],
+            "character_states": [],
+        }
+
+        update = parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
+
+        self.assertEqual(update.canon_facts[0].evidence, "凪は古い看板を\n二人で直した。")
+        payload["canon_facts"][0]["evidence"] = "凪"
         with self.assertRaises(StoryPipelineError):
             parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
 
