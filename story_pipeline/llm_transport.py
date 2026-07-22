@@ -28,10 +28,22 @@ ErrorKind = Literal[
 
 
 @dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """provider が返した token 利用量。欠落値は推測しない。"""
+
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    cached_tokens: int | None
+    reasoning_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class ChatResponse:
     content: str
     model: str
     finish_reason: str | None
+    usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +143,42 @@ def _parse_success(body: bytes, sanitizer: SecretSanitizer) -> ChatResponse:
             raise (TypeError)
         if finish_reason == "length":
             raise ApiFailure("output_truncated", "モデル出力がトークン上限で切断されました")
-        return ChatResponse(content, model, finish_reason if isinstance(finish_reason, str) else None)
+        return ChatResponse(
+            content,
+            model,
+            finish_reason if isinstance(finish_reason, str) else None,
+            _normalize_usage(value.get("usage")),
+        )
     except ApiFailure:
         raise
     except (UnicodeError, json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
         message = _error_message(body, sanitizer)
         raise ApiFailure("invalid_response", message or "API 応答形式が不正です") from None
+
+
+def _normalize_usage(value: Any) -> TokenUsage | None:
+    """OpenAI 互換 usage を正規化し、不明値は null のまま保つ。"""
+    if not isinstance(value, dict):
+        return None
+    prompt_details = value.get("prompt_tokens_details")
+    completion_details = value.get("completion_tokens_details")
+    cached = value.get("cached_tokens")
+    if cached is None and isinstance(prompt_details, dict):
+        cached = prompt_details.get("cached_tokens")
+    reasoning = value.get("reasoning_tokens")
+    if reasoning is None and isinstance(completion_details, dict):
+        reasoning = completion_details.get("reasoning_tokens")
+    return TokenUsage(
+        _usage_integer(value.get("prompt_tokens")),
+        _usage_integer(value.get("completion_tokens")),
+        _usage_integer(value.get("total_tokens")),
+        _usage_integer(cached),
+        _usage_integer(reasoning),
+    )
+
+
+def _usage_integer(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _error_message(body: bytes, sanitizer: SecretSanitizer) -> str:

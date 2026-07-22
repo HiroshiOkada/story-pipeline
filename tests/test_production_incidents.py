@@ -194,12 +194,18 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             self.assertEqual(result.state_updates["phase"], "chapter_revision")
             self.assertEqual(result.state_updates["next_episode"], 2)
 
-    def test_i09_transport_discards_provider_usage(self) -> None:
+    def test_i09_transport_preserves_normalized_provider_usage(self) -> None:
         body = json.dumps(
             {
                 "model": "mock",
                 "choices": [{"message": {"content": "本文"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                    "completion_tokens_details": {"reasoning_tokens": 6},
+                },
             }
         ).encode()
         transport = ChatTransport(open_url=lambda *_args, **_kwargs: _Response(body))
@@ -214,7 +220,11 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             timeout=1,
         )
 
-        self.assertFalse(hasattr(response, "usage"))
+        self.assertEqual(response.usage.prompt_tokens, 10)
+        self.assertEqual(response.usage.completion_tokens, 20)
+        self.assertEqual(response.usage.total_tokens, 30)
+        self.assertEqual(response.usage.cached_tokens, 4)
+        self.assertEqual(response.usage.reasoning_tokens, 6)
 
 
 if __name__ == "__main__":

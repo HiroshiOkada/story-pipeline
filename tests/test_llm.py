@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -175,6 +176,47 @@ class LLMClientTest(unittest.TestCase):
         self.assertEqual(result.attempts, 3)
         self.assertEqual(len(result.fallbacks), 1)
         self.assertEqual(sleeps, [0.5])
+
+    def test_transport_attempts_measure_retry_wait_and_missing_usage(self) -> None:
+        class FakeClock:
+            def __init__(self) -> None:
+                self.seconds = 0.0
+
+            def monotonic(self) -> float:
+                value = self.seconds
+                self.seconds += 0.125
+                return value
+
+            def now(self) -> datetime:
+                return datetime(2026, 7, 22, tzinfo=timezone.utc) + timedelta(seconds=self.seconds)
+
+            def sleep(self, seconds: float) -> None:
+                self.seconds += seconds
+
+        clock = FakeClock()
+        transport = SequenceTransport([
+            ApiFailure("temporary", "retry"),
+            ChatResponse("done", "a", "stop"),
+        ])
+        client = LLMClient(
+            self.config(),
+            {"KEY": "secret"},
+            transport=transport,
+            sleep=clock.sleep,
+            random_factor=lambda: 0,
+            monotonic=clock.monotonic,
+            utc_now=clock.now,
+        )
+
+        result = client.complete_role("writer", [])
+
+        self.assertIsNone(result.response.usage)
+        self.assertEqual(len(result.transport_attempts), 2)
+        self.assertEqual(result.transport_attempts[0].elapsed_ms, 125)
+        self.assertEqual(result.transport_attempts[0].wait_ms, 500)
+        self.assertEqual(result.transport_attempts[0].failure_kind, "temporary")
+        self.assertEqual(result.transport_attempts[1].elapsed_ms, 125)
+        self.assertEqual(result.transport_attempts[1].result, "completed")
 
     def test_unsupported_config_parameter_is_removed_once(self) -> None:
         transport = SequenceTransport(
