@@ -11,7 +11,7 @@ from typing import Any
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
 from story_pipeline.errors import StoryPipelineError
-from story_pipeline.llm_output import FieldRule, parse_json_object
+from story_pipeline.llm_output import FieldRule, parse_json_object, validate_markdown
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -81,6 +81,28 @@ class PlottingContext:
 
     messages: tuple[dict[str, str], ...]
     input_hashes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PlottingMechanicalIssue:
+    code: str
+    location: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlottingMechanicalCheck:
+    plot: str
+    chapters: tuple[tuple[str, str], ...]
+    issues: tuple[PlottingMechanicalIssue, ...]
+
+    @property
+    def accepted(self) -> bool:
+        return not self.issues
+
+    @property
+    def documents(self) -> tuple[tuple[str, str], ...]:
+        return (("plot.md", self.plot), *self.chapters)
 
 
 def build_plotting_context(
@@ -188,6 +210,117 @@ def plotting_generation_response_format() -> dict[str, Any]:
         "type": "json_schema",
         "json_schema": {"name": "plotting_candidate", "strict": True, "schema": schema},
     }
+
+
+def check_plotting_candidate(candidate: PlottingCandidate) -> PlottingMechanicalCheck:
+    """内容を創作せず、plot と章計画を正規化して構造・話範囲を検査する。"""
+    issues: list[PlottingMechanicalIssue] = []
+    plot = _normalize_document("plot.md", candidate.plot, PLOT_HEADINGS, issues)
+    chapters: list[tuple[str, str]] = []
+    previous_episode_end = 0
+    for path, content in candidate.chapters:
+        normalized = _normalize_document(path, content, CHAPTER_HEADINGS, issues)
+        chapters.append((path, normalized))
+        if path not in plot:
+            issues.append(
+                PlottingMechanicalIssue(
+                    "CHAPTER_NOT_IN_PLOT",
+                    path,
+                    "plot.md の章構成から章計画パスを追跡できません",
+                )
+            )
+        episode_body = _section_body(normalized, CHAPTER_HEADINGS, "## 収録話")
+        episode_numbers = [int(value) for value in re.findall(r"(?<![0-9])[0-9]{4}(?![0-9])", episode_body)]
+        if not episode_numbers:
+            issues.append(
+                PlottingMechanicalIssue(
+                    "MISSING_EPISODE_RANGE",
+                    f"{path} ## 収録話",
+                    "4桁の収録話番号または範囲がありません",
+                )
+            )
+            continue
+        episode_start = min(episode_numbers)
+        episode_end = max(episode_numbers)
+        if episode_start == 0:
+            issues.append(
+                PlottingMechanicalIssue(
+                    "INVALID_EPISODE_NUMBER",
+                    f"{path} ## 収録話",
+                    "話番号は0001以上である必要があります",
+                )
+            )
+        if episode_start != previous_episode_end + 1:
+            issues.append(
+                PlottingMechanicalIssue(
+                    "EPISODE_RANGE_SEQUENCE",
+                    f"{path} ## 収録話",
+                    "章間の収録話範囲に重複または飛びがあります",
+                )
+            )
+        previous_episode_end = episode_end
+    return PlottingMechanicalCheck(plot, tuple(chapters), tuple(issues))
+
+
+def _normalize_document(
+    path: str,
+    content: str,
+    headings: tuple[str, ...],
+    issues: list[PlottingMechanicalIssue],
+) -> str:
+    try:
+        normalized = validate_markdown(content)
+    except StoryPipelineError as error:
+        issues.append(PlottingMechanicalIssue("INVALID_MARKDOWN", path, error.reason))
+        return content if isinstance(content, str) else ""
+    if any(line.strip().startswith("```") for line in normalized.splitlines()):
+        issues.append(PlottingMechanicalIssue("FENCE_REMAINS", path, "Markdown fence が本文内に残っています"))
+    if re.search(r"<!--[\s\S]*?-->", normalized):
+        issues.append(PlottingMechanicalIssue("TEMPLATE_COMMENT", path, "HTML コメントが残っています"))
+    lines = normalized.splitlines()
+    positions: dict[str, list[int]] = {heading: [] for heading in headings}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in positions:
+            positions[stripped].append(index)
+    for heading in headings:
+        found = positions[heading]
+        if not found:
+            issues.append(PlottingMechanicalIssue("MISSING_HEADING", f"{path} {heading}", "必須見出しがありません"))
+        elif len(found) > 1:
+            issues.append(PlottingMechanicalIssue("DUPLICATE_HEADING", f"{path} {heading}", "必須見出しが重複しています"))
+    all_positions = [position for found in positions.values() for position in found]
+    first = positions[headings[0]]
+    if first and all_positions and first[0] == min(all_positions):
+        preamble = [line.strip() for line in lines[: first[0]] if line.strip()]
+        if preamble and not (len(preamble) == 1 and preamble[0].startswith("# ")):
+            issues.append(PlottingMechanicalIssue("UNEXPECTED_PREAMBLE", path, "最初の必須見出しより前に説明文があります"))
+    if all(len(positions[heading]) == 1 for heading in headings):
+        ordered = [positions[heading][0] for heading in headings]
+        if ordered != sorted(ordered):
+            issues.append(PlottingMechanicalIssue("HEADING_ORDER", path, "必須見出しが指定順ではありません"))
+        else:
+            for index, heading in enumerate(headings):
+                start = ordered[index] + 1
+                end = ordered[index + 1] if index + 1 < len(ordered) else len(lines)
+                body = [line for line in lines[start:end] if line.strip()]
+                if not body or all(line.lstrip().startswith("#") for line in body):
+                    issues.append(PlottingMechanicalIssue("EMPTY_SECTION", f"{path} {heading}", "必須節の本文が空です"))
+    return normalized
+
+
+def _section_body(content: str, headings: tuple[str, ...], target: str) -> str:
+    lines = content.splitlines()
+    try:
+        start = next(index for index, line in enumerate(lines) if line.strip() == target) + 1
+    except StopIteration:
+        return ""
+    end = len(lines)
+    for heading in headings[headings.index(target) + 1 :]:
+        positions = [index for index, line in enumerate(lines[start:], start) if line.strip() == heading]
+        if positions:
+            end = min(end, positions[0])
+    return "\n".join(lines[start:end])
 
 
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:

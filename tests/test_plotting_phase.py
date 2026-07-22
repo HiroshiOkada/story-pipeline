@@ -12,6 +12,7 @@ from story_pipeline.plotting import (
     DEFAULT_PLOTTING_CONTEXT,
     PLOT_HEADINGS,
     build_plotting_context,
+    check_plotting_candidate,
     parse_plotting_candidate,
     plotting_generation_response_format,
 )
@@ -87,6 +88,55 @@ class PlottingPhaseTest(unittest.TestCase):
         schema = plotting_generation_response_format()["json_schema"]["schema"]
         self.assertEqual(set(schema["required"]), {"plot.md", "chapters"})
         self.assertEqual(schema["properties"]["chapters"]["minItems"], 1)
+
+    def test_mechanical_check_accepts_complete_sequential_bundle(self) -> None:
+        plot = "```markdown\n" + "\n\n".join(
+            f"{heading}\n{'chapters/0001.md と chapters/0002.md' if heading == '## 章構成' else '内容'}"
+            for heading in PLOT_HEADINGS
+        ) + "\n```"
+        chapters = []
+        for number, episode_range in ((1, "0001〜0003"), (2, "0004〜0005")):
+            content = "\n\n".join(
+                f"{heading}\n{episode_range if heading == '## 収録話' else '内容'}"
+                for heading in CHAPTER_HEADINGS
+            )
+            chapters.append((f"chapters/{number:04d}.md", content))
+        candidate = parse_plotting_candidate(
+            json.dumps(
+                {
+                    "plot.md": plot,
+                    "chapters": [{"path": path, "content": content} for path, content in chapters],
+                }
+            ),
+            generation=1,
+            model_reference="mock",
+            input_hashes=(),
+        )
+        checked = check_plotting_candidate(candidate)
+        self.assertTrue(checked.accepted)
+        self.assertFalse(checked.plot.startswith("```"))
+
+    def test_mechanical_check_reports_structure_references_and_episode_gaps(self) -> None:
+        plot = "\n\n".join(f"{heading}\n内容" for heading in PLOT_HEADINGS)
+        chapter = "\n\n".join(
+            f"{heading}\n{'0002〜0003' if heading == '## 収録話' else '内容'}"
+            for heading in reversed(CHAPTER_HEADINGS)
+        )
+        candidate = parse_plotting_candidate(
+            json.dumps(
+                {
+                    "plot.md": plot,
+                    "chapters": [{"path": "chapters/0001.md", "content": chapter}],
+                }
+            ),
+            generation=1,
+            model_reference="mock",
+            input_hashes=(),
+        )
+        codes = {issue.code for issue in check_plotting_candidate(candidate).issues}
+        self.assertIn("CHAPTER_NOT_IN_PLOT", codes)
+        self.assertIn("EPISODE_RANGE_SEQUENCE", codes)
+        self.assertIn("HEADING_ORDER", codes)
 
 
 if __name__ == "__main__":
