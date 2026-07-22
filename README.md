@@ -1,0 +1,95 @@
+# Story Pipeline
+
+Story Pipeline は、人間が Markdown で与えた要求を起点に、LLM と協調して小説の構想、設定、構成、話計画、本文、改稿を段階的に制作する CLI です。成果物、状態、実行記録をファイルと Git コミットに残し、要求ごとに人間が方針を修正できます。
+
+## 動作要件
+
+- Python 3.12 以上
+- Git
+- OpenAI Chat Completions 互換 API の認証情報
+
+## 導入
+
+PyPI 公開前は、リポジトリのチェックアウトから導入します。
+
+```console
+git clone <repository-url>
+cd story-pipeline
+python -m pip install .
+story-pipeline --version
+```
+
+開発時は [uv](https://docs.astral.sh/uv/) を使ってコマンドを実行できます。
+
+```console
+uv run story-pipeline --help
+uv run python -m unittest discover -s tests -p 'test_*.py'
+```
+
+## クイックスタート
+
+1. 空のディレクトリを初期化します。
+
+   ```console
+   mkdir my-story
+   story-pipeline init my-story
+   cd my-story
+   ```
+
+2. `story-pipeline-config.jsonc` の provider、model々の role を利用する API に合わせて設定します。初期値は OpenAI と `gpt-4.1` です。
+3. 設定の `api_key_env` が示す環境変数を、`~/.env`、作品ルートの `.env`、またはプロセス環境に設定します。
+
+   ```dotenv
+   OPENAI_API_KEY=your-api-key
+   ```
+
+4. `requests/0000.md` に作りたい作品と条件を書き、検査後に実行します。
+
+   ```console
+   story-pipeline validate
+   story-pipeline status
+   story-pipeline run
+   ```
+
+5. 処理後の `requests/0000_agent.md` と作品ファイルを確認し、次に作成された `requests/0001.md` へ追加要求や判断を記入します。
+
+## 設定
+
+`story-pipeline-config.jsonc` はコメント付き JSON です。主な設定は次のとおりです。
+
+- `dotenv.files`: 認証情報を読み込む dotenv ファイル。プロセス環境を最優先とし、先に読み込んだ値を保持します。
+- `providers`: API の `base_url` と API キー環境変数名。
+- `models`: provider、モデル識別子、任意の `max_tokens` と追加パラメーター。
+- `roles`: `planner`, `writer`, `reviewer`, `reviser`, `summarizer` ごとのモデル候補。前から順に試行します。
+- `limits`: 1要求内の生成・検査・改稿・要約回数と変更行数の上限。
+- `request`: HTTP タイムアウトと通信再試行回数。
+
+設定契約とファイル形式の詳細は [`docs/detailed-specification`](docs/detailed-specification/README.md) を参照してください。
+
+## コマンド
+
+| コマンド | 動作 |
+| --- | --- |
+| `story-pipeline init [PATH]` | 空のディレクトリに作品プロジェクトを作成します。 |
+| `story-pipeline status` | 現在のフェーズと次の標準処理を副作用なしで表示します。 |
+| `story-pipeline validate` | 設定、状態、成果物、Git の整合性を API 呼び出しなしで検査します。 |
+| `story-pipeline run` | 最若番号の未処理要求を1件処理します。 |
+
+## 安全な運用
+
+- `run` は Git 作業ツリー、実行ロック、設定、認証情報、API 接続を確認してから作品を変更します。
+- 人間が編集した要求と設定を開始時コミットに、採用済み成果物と実行記録を終了時コミットに保存します。
+- staged 変更、競合、Git の履歴操作中、想定外の変更がある場合は自動処理を開始しません。
+- `.env` と `.story-pipeline/run.lock` は初期化時から Git の除外対象です。API キーを設定、報告、コミットへ記録しないでください。
+- 終了ステータスが `awaiting_human` の場合は、報告の判断 ID を確認して次の要求に回答します。
+
+## 開発者向け検証
+
+```console
+uv run python -m unittest discover -s tests -p 'test_*.py'
+uv run python -m compileall -q story_pipeline tests
+uv build
+git diff --check
+```
+
+OpenRouter を使う統合テストは、`~/.env` の `OPENROUTER_APIKEY` と `deepseek/deepseek-v4-flash:nitro` を使用します。外部 API を使うため、通常の単体テストからは分離しています。
