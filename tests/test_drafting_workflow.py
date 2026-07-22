@@ -108,6 +108,45 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertIsNone(result.knowledge_update)
         self.assertEqual(dict(result.call_counts)["review"], 1)
 
+    def test_knowledge_failure_resume_skips_writer_and_draft_reviewer(self) -> None:
+        accepted_label = "二人は看板を直し始めた。"
+        first = FakeClient([
+            draft_payload(accepted_label), evaluation("accept", 5), "{}", "{}",
+        ])
+
+        failed = produce_draft(self.root, self.request, self.interpretation, 1, first)
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(first.roles, ["writer", "reviewer", "reviewer", "reviewer"])
+        second = FakeClient([knowledge(accepted_label)])
+
+        resumed = produce_draft(self.root, self.request, self.interpretation, 1, second)
+
+        self.assertEqual(resumed.status, "completed")
+        self.assertEqual(second.roles, ["reviewer"])
+        self.assertEqual([item.purpose for item in resumed.calls], ["knowledge"])
+        self.assertIn("CHECKPOINT_REUSED", {item.code for item in resumed.diagnostics})
+
+    def test_changed_checkpoint_input_regenerates_draft(self) -> None:
+        accepted_label = "二人は看板を直し始めた。"
+        first = FakeClient([
+            draft_payload(accepted_label), evaluation("accept", 5), "{}", "{}",
+        ])
+        self.assertEqual(
+            produce_draft(self.root, self.request, self.interpretation, 1, first).status,
+            "failed",
+        )
+        (self.root / "canon.md").write_text("# canon.md\n\n人間が更新した内容\n", encoding="utf-8")
+        second = FakeClient([
+            draft_payload("新しい本文"), evaluation("accept", 5), knowledge("新しい本文"),
+        ])
+
+        resumed = produce_draft(self.root, self.request, self.interpretation, 1, second)
+
+        self.assertEqual(resumed.status, "completed")
+        self.assertEqual(second.roles, ["writer", "reviewer", "reviewer"])
+        self.assertNotIn("CHECKPOINT_REUSED", {item.code for item in resumed.diagnostics})
+
 
 if __name__ == "__main__":
     unittest.main()

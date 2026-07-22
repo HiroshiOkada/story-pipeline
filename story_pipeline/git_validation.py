@@ -18,6 +18,7 @@ MANAGED_FILE = re.compile(
     r"^requests/[0-9]{4}_agent\.md$|"
     r"^\.story-pipeline/state\.json$|"
     r"^\.story-pipeline/runs/[0-9]{4}\.json$"
+    r"|^\.story-pipeline/checkpoints/[0-9]{4}/draft\.json$"
 )
 HUMAN_INPUT = re.compile(r"^requests/[0-9]{4}\.md$|^story-pipeline-config\.jsonc$")
 INFRASTRUCTURE = {".gitignore"}

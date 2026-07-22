@@ -138,7 +138,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
         self.assertEqual(resumed["request_revisions"][1]["sha256"], changed_hash)
         self.assertEqual(resumed["start_commit"], "a" * 40)
 
-    def test_i05_validated_draft_is_not_saved_when_knowledge_extraction_fails(self) -> None:
+    def test_i05_validated_draft_is_checkpointed_when_knowledge_extraction_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             create_scaffold(root)
@@ -160,6 +160,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             self.assertEqual(result.status, "failed")
             self.assertIsNotNone(result.best)
             self.assertFalse((root / "episodes/0001.md").exists())
+            self.assertTrue((root / ".story-pipeline/checkpoints/0000/draft.json").is_file())
 
     def test_i07_last_episode_still_transitions_to_episode_planning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
