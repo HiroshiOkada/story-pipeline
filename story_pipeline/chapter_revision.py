@@ -513,9 +513,10 @@ def build_chapter_completion_update(
     for index, quote in enumerate(value["evidence"]):
         if not isinstance(quote, str) or not quote.strip():
             raise _format_error(f"evidence/{index} は空でない文字列である必要があります")
-        if combined.count(quote) != 1:
+        resolved = _resolve_summary_evidence(quote, combined)
+        if resolved is None:
             raise _format_error(f"evidence/{index} が採用本文に一意に存在しません")
-        evidence.append(quote)
+        evidence.append(resolved)
     if not evidence:
         raise _format_error("章あらすじには1件以上の evidence が必要です")
     updated_chapter = _replace_summary_section(chapter_content, value["summary"])
@@ -527,6 +528,29 @@ def build_chapter_completion_update(
         context.chapter_path, updated_chapter, value["summary"].strip(), tuple(evidence),
         completed, next_chapter, "final_revision" if all_chapters_complete else "episode_planning",
     )
+
+
+def _resolve_summary_evidence(evidence: str, content: str) -> str | None:
+    """改行などの空白差を許容しつつ、一意な原文引用へ戻す。"""
+    normalized_evidence = "".join(character for character in evidence if not character.isspace())
+    if not normalized_evidence:
+        return None
+    characters: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(content):
+        if not character.isspace():
+            characters.append(character)
+            positions.append(index)
+    normalized_content = "".join(characters)
+    starts: list[int] = []
+    offset = 0
+    while (found := normalized_content.find(normalized_evidence, offset)) >= 0:
+        starts.append(found)
+        offset = found + 1
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    return content[positions[start]:positions[start + len(normalized_evidence) - 1] + 1]
 
 
 def _replace_summary_section(content: str, summary: str) -> str:

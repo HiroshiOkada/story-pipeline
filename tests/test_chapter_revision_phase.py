@@ -220,6 +220,25 @@ class ChapterRevisionContextTest(unittest.TestCase):
                 chapter_content=(self.root / context.chapter_path).read_text(encoding="utf-8"),
             )
 
+    def test_completion_update_resolves_evidence_with_whitespace_differences(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        scores = {name: 5 for name in CHAPTER_SCORE_NAMES}
+        evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        documents = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        accepted = EvaluatedChapterRevision(None, documents, evaluation)
+
+        update = build_chapter_completion_update(
+            json.dumps({"summary": "要約", "evidence": ["本 文 1"]}, ensure_ascii=False),
+            context=context,
+            accepted=accepted,
+            chapter_content=(self.root / context.chapter_path).read_text(encoding="utf-8"),
+        )
+
+        self.assertEqual(update.evidence, ("本文1",))
+
     def test_summary_schema_is_strict(self) -> None:
         schema = chapter_summary_response_format()["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
