@@ -447,6 +447,7 @@ story-pipeline init       scaffold を生成する
 story-pipeline run        次の未処理要求を処理する
 story-pipeline status     現在のフェーズと進捗を表示する
 story-pipeline validate   設定、作品ファイル、状態の整合性を検査する
+story-pipeline migrate-state  検証済み作品ファイルから既存状態を明示的に移行する
 ```
 
 引数なしの実行はヘルプ表示のみとし、操作には明示的なサブコマンドを必要とする。

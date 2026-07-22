@@ -26,6 +26,12 @@ from story_pipeline.knowledge_adoption import (
 )
 from story_pipeline.plotting_workflow import produce_plotting
 from story_pipeline.request_planner import PlannedRequest
+from story_pipeline.state_transitions import (
+    all_chapters_complete_after,
+    transition_after_chapter,
+    transition_after_draft,
+)
+from story_pipeline.story_structure import load_story_structure
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,18 +136,14 @@ def execute_planned_workflow(
                     )
                 checkpoint = prepare_checkpoint_adoption(checkpoint, hashes)
                 write_draft_checkpoint(root, checkpoint)
-        completed = sorted(set((*state["completed_episodes"], number)))
         updates = (
-            {
-                "phase": "episode_planning",
-                "completed_episodes": completed,
-                "next_episode": min(9999, max(state["next_episode"], number + 1)),
-            }
+            transition_after_draft(load_story_structure(root), state, number)
             if documents and result.status == "completed"
             else {}
         )
     elif phase == "chapter_revision":
         number = _target_number(planned.scope.targets[0], state["current_chapter"] or 1)
+        structure = load_story_structure(root)
         result = produce_chapter_revision(
             root,
             request,
@@ -149,18 +151,16 @@ def execute_planned_workflow(
             number,
             client,
             completed_chapters=tuple(state["completed_chapters"]),
+            all_chapters_complete=all_chapters_complete_after(
+                structure, state["completed_chapters"], number
+            ),
         )
         documents = () if result.best is None else result.best.documents
         updates = {}
         if result.completion_update is not None:
             completion = result.completion_update
             documents = (*documents, (completion.chapter_path, completion.chapter_content))
-            updates = {
-                "phase": completion.next_phase,
-                "completed_chapters": list(completion.completed_chapters),
-                "next_chapter": completion.next_chapter,
-                "current_chapter": None if completion.next_phase == "final_revision" else completion.next_chapter,
-            }
+            updates = transition_after_chapter(structure, state, number)
     elif phase in {"final_revision", "completed"}:
         if phase == "completed" or planned.scope.action == "report_completed":
             return WorkflowExecution("completed", phase, (), {}, (), "完成済み", None)

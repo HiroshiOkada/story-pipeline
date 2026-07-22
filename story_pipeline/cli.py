@@ -19,6 +19,7 @@ from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
+from story_pipeline.state_migration import migrate_state_command
 from story_pipeline.status import determine_next_action, inspect_status
 from story_pipeline.validation import IssueCollector
 
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run", help="次の未処理要求を実行する")
     subparsers.add_parser("status", help="作品の現在状態を表示する")
     subparsers.add_parser("validate", help="作品と設定の整合性を検証する")
+    subparsers.add_parser("migrate-state", help="作品ファイルから制作状態を明示的に移行する")
     return parser
 
 
@@ -75,6 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _validate_project()
         elif args.command == "run":
             return run_command(output=sys.stdout, error_output=sys.stderr)
+        elif args.command == "migrate-state":
+            return migrate_state_command(find_project_root(), sys.stdout)
         return 0
     except StoryPipelineError as error:
         return _error(error.reason, error.location, error.action, error.exit_code)

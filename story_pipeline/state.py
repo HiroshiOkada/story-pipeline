@@ -52,9 +52,14 @@ def validate_state_data(state: Any) -> dict[str, Any]:
     next_episode = _number(state["next_episode"], "/next_episode")
     chapters = _number_sequence(state["completed_chapters"], "/completed_chapters")
     episodes = _number_sequence(state["completed_episodes"], "/completed_episodes")
-    if chapters and next_chapter <= chapters[-1]:
+    terminal_phase = phase in {"chapter_revision", "final_revision", "completed"}
+    if chapters and next_chapter <= chapters[-1] and not (
+        terminal_phase and chapters[-1] == 9999 and next_chapter == 9999
+    ):
         _invalid("完了済み最大番号より大きい必要があります。", "/next_chapter")
-    if episodes and next_episode <= episodes[-1]:
+    if episodes and next_episode <= episodes[-1] and not (
+        terminal_phase and episodes[-1] == 9999 and next_episode == 9999
+    ):
         _invalid("完了済み最大番号より大きい必要があります。", "/next_episode")
     _nullable_number(state["current_chapter"], "/current_chapter")
     _validate_reviews(state["pending_reviews"])

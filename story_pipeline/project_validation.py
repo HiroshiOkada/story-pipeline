@@ -97,7 +97,7 @@ def _validate_status_consistency(
             if warning.code == "LOCK_INVALID":
                 collector.error(warning.code, warning.message, ".story-pipeline/run.lock")
             continue
-        collector.error(f"STATE_{warning.code}", warning.message)
+        collector.error(f"STATE_{warning.code}", warning.message, warning.location)
 
 
 def _validate_request_correspondence(

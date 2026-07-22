@@ -162,7 +162,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             self.assertFalse((root / "episodes/0001.md").exists())
             self.assertTrue((root / ".story-pipeline/checkpoints/0000/draft.json").is_file())
 
-    def test_i07_last_episode_still_transitions_to_episode_planning(self) -> None:
+    def test_i07_last_episode_transitions_to_chapter_revision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             (root / "chapters").mkdir()
@@ -191,7 +191,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
             ):
                 result = execute_planned_workflow(root, state, planned, SimpleNamespace())
 
-            self.assertEqual(result.state_updates["phase"], "episode_planning")
+            self.assertEqual(result.state_updates["phase"], "chapter_revision")
             self.assertEqual(result.state_updates["next_episode"], 2)
 
     def test_i09_transport_discards_provider_usage(self) -> None:

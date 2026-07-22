@@ -8,6 +8,7 @@ story-pipeline init [PATH]
 story-pipeline run
 story-pipeline status
 story-pipeline validate
+story-pipeline migrate-state
 ```
 
 - 引数なし、`-h`、`--help` はヘルプを標準出力へ表示し、終了コード `0` で終了する。
@@ -154,7 +155,21 @@ WARNING UNTRACKED_UNKNOWN_FILE file is not managed by Story Pipeline: notes.txt
 
 問題がなければ `Validation passed.`、警告だけなら件数を表示して `0`、エラーがあればエラー・警告件数を表示して `4` とする。自動修復、Git add、復元、フォーマット変更は行わない。
 
-## 7. エラー表示
+## 7. `migrate-state`
+
+`migrate-state` は、旧実装が本文採用後も `episode_planning` を指している既存状態を、章・話対応表から明示的に修正する。API は呼び出さない。
+
+次をすべて満たす場合だけ実行する。
+
+1. active request と実行ロックがない。
+2. Git repository が通常状態で、tracked、staged、未知の untracked 差分がない。自動作成された実質空の次要求だけは残せる。
+3. 章番号と全収録話が1始まりで連続し、重複・欠落・逆順がない。
+4. `completed_episodes` が実在する本文の連続 prefix と完全一致する。
+5. `completed_chapters` が章対応表の連続 prefix で、各完了章の全本文が存在する。
+
+条件を満たす場合、phase、current/next chapter、next episode だけを再計算し、`.story-pipeline/state.json` を `Migrate story state` commit に保存する。作品ファイル、要求、run、既存 commit は変更しない。すでに正規状態なら変更も commit も作らない。
+
+## 8. エラー表示
 
 捕捉済みエラーは原則として次の3行以内にする。
 
