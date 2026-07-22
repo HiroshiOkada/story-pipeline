@@ -11,7 +11,7 @@ from unittest import mock
 from story_pipeline.cli import main
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
-from story_pipeline.status import determine_next_action
+from story_pipeline.status import determine_next_action, inspect_status
 
 
 class StatusCommandTest(unittest.TestCase):
@@ -96,6 +96,36 @@ class StatusCommandTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(self.file_contents(root), before)
+
+    def test_warns_when_completed_chapter_needs_revision_or_next_episode_is_wrong(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            create_scaffold(root)
+            (root / "chapters/0001.md").write_text("## 収録話\n0001-0002\n")
+            state = load_state(root)
+            state.update({
+                "phase": "episode_planning",
+                "current_chapter": 1,
+                "next_chapter": 1,
+                "next_episode": 2,
+                "completed_episodes": [1, 2],
+            })
+
+            snapshot = inspect_status(root, state)
+
+            warning = next(item for item in snapshot.warnings if item.code == "CHAPTER_REVISION_REQUIRED")
+            self.assertEqual(warning.location, "/phase")
+
+    def test_warns_with_chapter_location_for_invalid_story_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            create_scaffold(root)
+            (root / "chapters/0001.md").write_text("## 収録話\n0001 0003\n")
+
+            snapshot = inspect_status(root, load_state(root))
+
+            warning = next(item for item in snapshot.warnings if item.code == "STORY_STRUCTURE_INVALID")
+            self.assertEqual(warning.location, "chapters/0001.md ## 収録話")
 
     def test_rejects_config_symlink_outside_search_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 from typing import Any
 
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.story_structure import StoryStructure, load_story_structure
+
 
 NUMBERED_MARKDOWN = re.compile(r"^([0-9]{4})\.md$")
 PHASE_ARTIFACTS: dict[str, tuple[str, ...]] = {
@@ -25,6 +28,7 @@ PHASE_ARTIFACTS: dict[str, tuple[str, ...]] = {
 class StatusWarning:
     code: str
     message: str
+    location: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,10 +84,132 @@ def inspect_status(root: Path, state: dict[str, Any]) -> StatusSnapshot:
     _check_next_number(root, state, "chapters", "next_chapter", warnings)
     _check_next_number(root, state, "episodes", "next_episode", warnings)
     _check_phase_artifacts(root, state["phase"], warnings)
+    _check_story_structure(root, state, warnings)
     _check_request_files(root, state, warnings)
     last_status = _read_last_request_status(root, state["last_request"], warnings)
     lock_info = _read_lock(root, warnings)
     return StatusSnapshot(root, state, last_status, lock_info, tuple(warnings))
+
+
+def _check_story_structure(
+    root: Path, state: dict[str, Any], warnings: list[StatusWarning]
+) -> None:
+    directory = root / "chapters"
+    try:
+        has_chapters = any(NUMBERED_MARKDOWN.fullmatch(item.name) for item in directory.iterdir())
+    except OSError:
+        return
+    if not has_chapters:
+        return
+    try:
+        structure = load_story_structure(root)
+    except StoryPipelineError as error:
+        warnings.append(StatusWarning("STORY_STRUCTURE_INVALID", error.reason, error.location))
+        return
+    chapter_numbers = structure.chapter_numbers
+    episode_numbers = structure.episode_numbers
+    completed_chapters = tuple(state["completed_chapters"])
+    completed_episodes = tuple(state["completed_episodes"])
+    if completed_chapters != chapter_numbers[:len(completed_chapters)]:
+        warnings.append(StatusWarning(
+            "COMPLETED_CHAPTER_SEQUENCE",
+            "completed_chapters が章対応表の完了済み prefix と一致しません。",
+            "/completed_chapters",
+        ))
+    if completed_episodes != episode_numbers[:len(completed_episodes)]:
+        warnings.append(StatusWarning(
+            "COMPLETED_EPISODE_SEQUENCE",
+            "completed_episodes が話対応表の完了済み prefix と一致しません。",
+            "/completed_episodes",
+        ))
+    for chapter_number in completed_chapters:
+        chapter = structure.chapter(chapter_number)
+        if not set(chapter.episodes) <= set(completed_episodes):
+            warnings.append(StatusWarning(
+                "COMPLETED_CHAPTER_EPISODES",
+                "完了章に未完了の収録話があります。",
+                f"{chapter.path} ## 収録話",
+            ))
+    _check_phase_transition_state(structure, state, warnings)
+
+
+def _check_phase_transition_state(
+    structure: StoryStructure,
+    state: dict[str, Any],
+    warnings: list[StatusWarning],
+) -> None:
+    phase = state["phase"]
+    if phase not in {"episode_planning", "drafting", "chapter_revision", "final_revision", "completed"}:
+        return
+    completed_chapters = set(state["completed_chapters"])
+    completed_episodes = set(state["completed_episodes"])
+    remaining_chapters = [item for item in structure.chapters if item.number not in completed_chapters]
+    remaining_episodes = [item for item in structure.episode_numbers if item not in completed_episodes]
+    if phase in {"final_revision", "completed"}:
+        if remaining_chapters:
+            warnings.append(StatusWarning(
+                "FINAL_PHASE_INCOMPLETE_CHAPTERS",
+                f"phase={phase} ですが未完了章があります。",
+                "/phase",
+            ))
+        if state["current_chapter"] is not None:
+            warnings.append(StatusWarning(
+                "FINAL_PHASE_CURRENT_CHAPTER", "全体段階では current_chapter は null が必要です。",
+                "/current_chapter",
+            ))
+        return
+    current = state["current_chapter"]
+    if current is None:
+        warnings.append(StatusWarning(
+            "CURRENT_CHAPTER_REQUIRED", f"phase={phase} には current_chapter が必要です。",
+            "/current_chapter",
+        ))
+        return
+    try:
+        chapter = structure.chapter(current)
+    except StoryPipelineError:
+        warnings.append(StatusWarning(
+            "CURRENT_CHAPTER_UNKNOWN", "current_chapter が章対応表にありません。", "/current_chapter"
+        ))
+        return
+    if current in completed_chapters:
+        warnings.append(StatusWarning(
+            "CURRENT_CHAPTER_COMPLETED", "current_chapter はすでに完了しています。", "/current_chapter"
+        ))
+    missing_in_current = [item for item in chapter.episodes if item not in completed_episodes]
+    if phase == "chapter_revision":
+        if missing_in_current:
+            warnings.append(StatusWarning(
+                "CHAPTER_REVISION_EPISODES_INCOMPLETE",
+                "章改稿対象に未完了の収録話があります。",
+                f"{chapter.path} ## 収録話",
+            ))
+        expected_episode = remaining_episodes[0] if remaining_episodes else _sentinel(structure.episode_numbers)
+    else:
+        if not missing_in_current:
+            warnings.append(StatusWarning(
+                "CHAPTER_REVISION_REQUIRED",
+                "章内全話が完了しているため chapter_revision が必要です。",
+                "/phase",
+            ))
+            return
+        expected_episode = missing_in_current[0]
+    if state["next_episode"] != expected_episode:
+        warnings.append(StatusWarning(
+            "NEXT_EPISODE_MISMATCH",
+            f"next_episode={state['next_episode']:04d} は期待値 {expected_episode:04d} と一致しません。",
+            "/next_episode",
+        ))
+    if state["next_chapter"] != current:
+        warnings.append(StatusWarning(
+            "NEXT_CHAPTER_MISMATCH",
+            "制作中は next_chapter と current_chapter が一致する必要があります。",
+            "/next_chapter",
+        ))
+
+
+def _sentinel(numbers: tuple[int, ...]) -> int:
+    return numbers[-1] if numbers[-1] == 9999 else numbers[-1] + 1
 
 
 def _check_completed_files(
@@ -110,6 +236,19 @@ def _check_next_number(
     warnings: list[StatusWarning],
 ) -> None:
     numbers = _numbered_files(root, Path(directory_name))
+    if (
+        directory_name == "chapters"
+        and state["current_chapter"] == state[state_key]
+        and state["phase"] not in {"final_revision", "completed"}
+    ):
+        return
+    if (
+        numbers
+        and max(numbers) == 9999
+        and state[state_key] == 9999
+        and state["phase"] in {"chapter_revision", "final_revision", "completed"}
+    ):
+        return
     if numbers and state[state_key] <= max(numbers):
         warnings.append(StatusWarning(
             "NEXT_NUMBER_CONFLICT",
