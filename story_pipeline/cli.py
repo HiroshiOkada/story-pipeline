@@ -13,7 +13,7 @@ from story_pipeline.config import load_config
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
-from story_pipeline.git_safety import commit_initial_scaffold
+from story_pipeline.git_safety import commit_initial_scaffold, inspect_initial_repository
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
@@ -137,6 +137,17 @@ def _init_project(raw_path: str) -> int:
             EXIT_CONFIG,
         )
 
+    repository_exists = _is_git_repository(root)
+    if (root / ".git").exists() and not repository_exists:
+        return _error(
+            "既存の .git を Git repository として確認できません。",
+            str(root / ".git"),
+            "Git repository の状態を確認してください。",
+            EXIT_GIT,
+        )
+    if repository_exists:
+        inspect_initial_repository(root)
+
     try:
         create_scaffold(root)
     except OSError:
@@ -147,7 +158,7 @@ def _init_project(raw_path: str) -> int:
             EXIT_IO,
         )
 
-    if not _is_git_repository(root):
+    if not repository_exists:
         try:
             subprocess.run(
                 ["git", "init", str(root)],
@@ -163,7 +174,18 @@ def _init_project(raw_path: str) -> int:
                 EXIT_GIT,
             )
 
-    commit_initial_scaffold(root)
+    try:
+        commit_initial_scaffold(root)
+    except StoryPipelineError as error:
+        raise StoryPipelineError(
+            error.reason,
+            error.location,
+            (
+                "Git identity の user.name と user.email を設定し、作成済みの "
+                "scaffold 4ファイルだけを手動で commit してください。"
+            ),
+            EXIT_GIT,
+        ) from error
 
     print(f"Initialized Story Pipeline project: {root}")
     print("Next request: requests/0000.md")

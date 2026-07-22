@@ -46,6 +46,18 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
     return GitPreflight(tuple(entries), frozenset(dotenv))
 
 
+def inspect_initial_repository(root: Path) -> None:
+    """既存の空 repository を変更せず初期化前提を検査する。"""
+    validate_run_repository(root)
+    entries = read_worktree(root)
+    if entries:
+        raise _git_error(
+            "初期化前の Git repository に差分があります",
+            entries[0].normalized_path(),
+        )
+    _inspect_index_flags(root, set())
+
+
 def validate_run_repository(root: Path) -> None:
     """ロック取得前に Git repository と進行中操作だけを検証する。"""
     top_level = _git_text(root, ["rev-parse", "--show-toplevel"])
@@ -207,6 +219,9 @@ def _staged_paths(root: Path) -> set[str]:
 
 
 def _unstage_our_paths(root: Path, paths: set[str]) -> None:
+    if _git_text(root, ["rev-parse", "--verify", "HEAD"]) is None:
+        _git(root, ["rm", "--cached", "-q", "--ignore-unmatch", "--", *sorted(paths)])
+        return
     _git(root, ["restore", "--staged", "--", *sorted(paths)])
 
 
