@@ -12,12 +12,15 @@ from story_pipeline.drafting import (
     EPISODE_HEADINGS,
     EvaluatedDraftCandidate,
     build_draft_revision_messages,
+    build_draft_knowledge_messages,
     build_drafting_context,
     check_draft_candidate,
     draft_generation_response_format,
     draft_evaluation_response_format,
+    draft_knowledge_response_format,
     parse_draft_candidate,
     parse_draft_evaluation,
+    parse_draft_knowledge_update,
     run_draft_revision_loop,
     select_best_draft,
 )
@@ -182,6 +185,41 @@ class DraftingPhaseTest(unittest.TestCase):
             DraftCandidate("episodes/0002.md", "B", 2, 2, "reviser", (), 1), evaluation
         )
         self.assertIs(select_best_draft([revised, first]), first)
+
+    def test_knowledge_update_requires_unique_evidence_from_accepted_draft(self) -> None:
+        candidate = DraftCandidate(
+            "episodes/0002.md",
+            "## 話タイトル\n潮風\n\n## 本文\n凪は湊と看板を直し、握手した。\n",
+            2, 1, "writer", (),
+        )
+        payload = {
+            "canon_facts": [{
+                "fact": "看板の修理が完了した", "evidence": "凪は湊と看板を直し、握手した。",
+                "source": "episodes/0002.md", "established_at": "第0002話終了時", "people": ["凪", "湊"],
+            }],
+            "character_states": [{
+                "character": "凪", "state": "湊との友情を回復した",
+                "evidence": "凪は湊と看板を直し、握手した。", "source": "episodes/0002.md",
+                "established_at": "第0002話終了時",
+            }],
+        }
+        update = parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
+        self.assertEqual(update.canon_facts[0].people, ("凪", "湊"))
+        self.assertEqual(update.character_states[0].character, "凪")
+        payload["canon_facts"][0]["evidence"] = "本文にない事実"
+        with self.assertRaises(StoryPipelineError):
+            parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
+
+    def test_knowledge_prompt_and_schema_pin_source_to_accepted_episode(self) -> None:
+        context = build_drafting_context(self.root, self.request, self.interpretation, 2)
+        candidate = DraftCandidate(
+            "episodes/0002.md", "## 話タイトル\n題\n\n## 本文\n本文\n", 2, 1, "writer", (),
+        )
+        messages = build_draft_knowledge_messages(context, candidate)
+        self.assertIn("BEGIN ACCEPTED DRAFT", messages[-2]["content"])
+        schema = draft_knowledge_response_format(2)["json_schema"]["schema"]
+        source = schema["properties"]["canon_facts"]["items"]["properties"]["source"]
+        self.assertEqual(source["const"], "episodes/0002.md")
 
 
 if __name__ == "__main__":

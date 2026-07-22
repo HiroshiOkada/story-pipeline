@@ -109,6 +109,7 @@ class EvaluatedDraftCandidate:
 @dataclass(frozen=True, slots=True)
 class CanonFact:
     fact: str
+    evidence: str
     source: str
     established_at: str
     people: tuple[str, ...]
@@ -118,6 +119,7 @@ class CanonFact:
 class CharacterStateUpdate:
     character: str
     state: str
+    evidence: str
     source: str
     established_at: str
 
@@ -467,6 +469,132 @@ def select_best_draft(
         )
 
     return max(adoptable, key=rank)
+
+
+def build_draft_knowledge_messages(
+    context: DraftingContext, candidate: DraftCandidate
+) -> tuple[dict[str, str], ...]:
+    """採用本文から確定事実と人物状態だけを抽出するメッセージを作る。"""
+    candidate_json = _candidate_json(candidate)
+    digest = hashlib.sha256(candidate_json.encode("utf-8")).hexdigest()
+    return (
+        {
+            "role": "system",
+            "content": (
+                "あなたは Story Pipeline の採用本文に基づく canon 更新 reviewer です。"
+                "採用本文で読者に明示された新しい事実と人物状態だけを抽出し、計画上の予定、"
+                "推測、解釈、却下案を含めません。各項目の evidence は採用本文からの改変しない"
+                "短い完全一致引用、source は対象本文パス、established_at は物語内の成立時点です。"
+                "既存 canon・人物状態と同一の情報は再追加しません。応答は指定 JSON object だけにします。"
+            ),
+        },
+        *context.messages[1:4],
+        {
+            "role": "user",
+            "content": (
+                f"採用本文:\n--- BEGIN ACCEPTED DRAFT sha256={digest} ---\n"
+                f"{candidate_json}\n--- END ACCEPTED DRAFT sha256={digest} ---"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "canon_facts と character_states を抽出してください。新規の確定情報がなければ"
+                "該当配列を空にしてください。"
+            ),
+        },
+    )
+
+
+def parse_draft_knowledge_update(
+    content: str, candidate: DraftCandidate
+) -> DraftKnowledgeUpdate:
+    """更新候補を検証し、全 evidence が採用本文に完全一致することを保証する。"""
+    value = parse_json_object(
+        content,
+        {"canon_facts": FieldRule((list,)), "character_states": FieldRule((list,))},
+    )
+    expected_source = candidate.path
+    canon_facts: list[CanonFact] = []
+    for index, item in enumerate(value["canon_facts"]):
+        expected = {"fact", "evidence", "source", "established_at", "people"}
+        _validate_update_object(item, expected, f"canon_facts/{index}")
+        people = item["people"]
+        if not isinstance(people, list) or any(not isinstance(person, str) or not person.strip() for person in people):
+            raise _drafting_format_error(f"canon_facts/{index}/people は空でない文字列の配列である必要があります")
+        if len(people) != len(set(people)):
+            raise _drafting_format_error(f"canon_facts/{index}/people に重複があります")
+        _validate_update_evidence(item, candidate.content, expected_source, f"canon_facts/{index}")
+        canon_facts.append(CanonFact(
+            item["fact"], item["evidence"], item["source"],
+            item["established_at"], tuple(people),
+        ))
+    character_states: list[CharacterStateUpdate] = []
+    for index, item in enumerate(value["character_states"]):
+        expected = {"character", "state", "evidence", "source", "established_at"}
+        _validate_update_object(item, expected, f"character_states/{index}")
+        _validate_update_evidence(item, candidate.content, expected_source, f"character_states/{index}")
+        character_states.append(CharacterStateUpdate(
+            item["character"], item["state"], item["evidence"],
+            item["source"], item["established_at"],
+        ))
+    return DraftKnowledgeUpdate(tuple(canon_facts), tuple(character_states))
+
+
+def draft_knowledge_response_format(episode_number: int) -> dict[str, Any]:
+    """採用本文に基づく canon・人物状態更新の厳格な JSON Schema。"""
+    source = f"episodes/{episode_number:04d}.md"
+    canon_fact = {
+        "type": "object", "additionalProperties": False,
+        "required": ["fact", "evidence", "source", "established_at", "people"],
+        "properties": {
+            "fact": {"type": "string", "minLength": 1},
+            "evidence": {"type": "string", "minLength": 1},
+            "source": {"type": "string", "const": source},
+            "established_at": {"type": "string", "minLength": 1},
+            "people": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True},
+        },
+    }
+    character_state = {
+        "type": "object", "additionalProperties": False,
+        "required": ["character", "state", "evidence", "source", "established_at"],
+        "properties": {
+            "character": {"type": "string", "minLength": 1},
+            "state": {"type": "string", "minLength": 1},
+            "evidence": {"type": "string", "minLength": 1},
+            "source": {"type": "string", "const": source},
+            "established_at": {"type": "string", "minLength": 1},
+        },
+    }
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["canon_facts", "character_states"],
+        "properties": {
+            "canon_facts": {"type": "array", "items": canon_fact},
+            "character_states": {"type": "array", "items": character_state},
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "draft_knowledge_update", "strict": True, "schema": schema},
+    }
+
+
+def _validate_update_object(item: Any, expected: set[str], location: str) -> None:
+    if not isinstance(item, dict) or set(item) != expected:
+        raise _drafting_format_error(f"{location} のキーが出力契約と一致しません")
+    for name in expected - {"people"}:
+        if not isinstance(item[name], str) or not item[name].strip():
+            raise _drafting_format_error(f"{location}/{name} は空でない文字列である必要があります")
+
+
+def _validate_update_evidence(
+    item: dict[str, Any], draft_content: str, expected_source: str, location: str
+) -> None:
+    if item["source"] != expected_source:
+        raise _drafting_format_error(f"{location}/source が採用本文パスと一致しません")
+    if draft_content.count(item["evidence"]) != 1:
+        raise _drafting_format_error(f"{location}/evidence が採用本文に一意に完全一致しません")
 
 
 def _candidate_json(candidate: DraftCandidate) -> str:
