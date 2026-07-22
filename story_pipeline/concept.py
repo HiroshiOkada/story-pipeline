@@ -7,10 +7,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from typing import Any
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
 from story_pipeline.errors import StoryPipelineError
-from story_pipeline.llm_output import validate_markdown
+from story_pipeline.llm_output import validate_evaluation, validate_markdown
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -66,6 +67,36 @@ class ConceptMechanicalCheck:
     @property
     def accepted(self) -> bool:
         return not self.issues
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationIssue:
+    severity: str
+    category: str
+    location: str
+    evidence: str
+    instruction: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConceptEvaluation:
+    """検証済み reviewer 評価と、プログラムが導出する採用可否。"""
+
+    decision: str
+    summary: str
+    issues: tuple[EvaluationIssue, ...]
+    scores: tuple[tuple[str, int], ...]
+
+    @property
+    def has_error(self) -> bool:
+        return any(issue.severity == "error" for issue in self.issues)
+
+    @property
+    def adoptable(self) -> bool:
+        return self.decision == "accept" and not self.has_error
+
+    def score(self, name: str) -> int:
+        return dict(self.scores)[name]
 
 
 def build_concept_context(
@@ -170,6 +201,71 @@ def check_concept_markdown(content: str) -> ConceptMechanicalCheck:
     return ConceptMechanicalCheck(normalized, tuple(issues))
 
 
+def parse_concept_evaluation(content: str) -> ConceptEvaluation:
+    """共通評価契約に加え、構想の採用比較に必要な score を検証する。"""
+    value = validate_evaluation(content)
+    required_scores = {"request_fit", "consistency"}
+    missing = required_scores - value["scores"].keys()
+    if missing:
+        raise _concept_format_error(
+            f"構想評価に必須 score がありません: {sorted(missing)[0]}"
+        )
+    issues = tuple(
+        EvaluationIssue(
+            item["severity"],
+            item["category"],
+            item["location"],
+            item["evidence"],
+            item["instruction"],
+        )
+        for item in value["issues"]
+    )
+    scores = tuple(sorted(value["scores"].items()))
+    return ConceptEvaluation(value["decision"], value["summary"], issues, scores)
+
+
+def concept_evaluation_response_format() -> dict[str, Any]:
+    """reviewer へ渡す厳格な構想評価 JSON Schema。"""
+    issue = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            "category": {"type": "string"},
+            "location": {"type": "string"},
+            "evidence": {"type": "string"},
+            "instruction": {"type": "string"},
+        },
+    }
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decision", "summary", "issues", "scores"],
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["accept", "revise", "awaiting_human"],
+            },
+            "summary": {"type": "string"},
+            "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 5},
+                "required": ["request_fit", "consistency"],
+                "properties": {
+                    "request_fit": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "consistency": {"type": "integer", "minimum": 1, "maximum": 5},
+                },
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "concept_evaluation", "strict": True, "schema": schema},
+    }
+
+
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:
     return "\n\n".join(document.delimited() for document in documents)
 
@@ -189,3 +285,12 @@ def _generation_task() -> str:
     return """現在要求を満たす一貫した作品構想を作成してください。
 全必須見出しを指定順で一度ずつ使い、各節に具体的な本文を記述してください。
 必須条件と禁止事項は、指定がない場合も「なし」と明記してください。"""
+
+
+def _concept_format_error(reason: str) -> StoryPipelineError:
+    return StoryPipelineError(
+        reason,
+        "LLM response",
+        "応答を修正指示付きで再生成してください",
+        7,
+    )

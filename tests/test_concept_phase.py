@@ -10,7 +10,10 @@ from story_pipeline.concept import (
     CONCEPT_HEADINGS,
     build_concept_context,
     check_concept_markdown,
+    concept_evaluation_response_format,
+    parse_concept_evaluation,
 )
+from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
 from story_pipeline.scaffold import create_scaffold
@@ -89,6 +92,46 @@ class ConceptPhaseTest(unittest.TestCase):
         codes = {issue.code for issue in checked.issues}
         self.assertIn("MISSING_HEADING", codes)
         self.assertIn("DUPLICATE_HEADING", codes)
+
+    def test_evaluation_requires_comparison_scores_and_derives_adoptability(self) -> None:
+        value = {
+            "decision": "accept",
+            "summary": "条件を満たす",
+            "issues": [],
+            "scores": {"request_fit": 5, "consistency": 4, "appeal": 3},
+        }
+        evaluation = parse_concept_evaluation(json.dumps(value, ensure_ascii=False))
+        self.assertTrue(evaluation.adoptable)
+        self.assertEqual(evaluation.score("request_fit"), 5)
+        value["scores"] = {"request_fit": 5}
+        with self.assertRaises(StoryPipelineError):
+            parse_concept_evaluation(json.dumps(value, ensure_ascii=False))
+
+    def test_evaluation_error_blocks_adoption_even_if_reviewer_says_accept(self) -> None:
+        value = {
+            "decision": "accept",
+            "summary": "矛盾あり",
+            "issues": [
+                {
+                    "severity": "error",
+                    "category": "required_condition",
+                    "location": "## 禁止事項",
+                    "evidence": "夢落ちを採用している",
+                    "instruction": "夢落ちを除く",
+                }
+            ],
+            "scores": {"request_fit": 2, "consistency": 3},
+        }
+        evaluation = parse_concept_evaluation(json.dumps(value, ensure_ascii=False))
+        self.assertFalse(evaluation.adoptable)
+
+    def test_evaluation_schema_is_strict(self) -> None:
+        schema = concept_evaluation_response_format()["json_schema"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            set(schema["properties"]["scores"]["required"]),
+            {"request_fit", "consistency"},
+        )
 
 
 if __name__ == "__main__":
