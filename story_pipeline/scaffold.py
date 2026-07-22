@@ -91,6 +91,7 @@ def create_scaffold(root: Path) -> None:
         root / "episode_plans",
         root / "episodes",
         root / ".story-pipeline",
+        root / ".story-pipeline" / "runs",
     )
     files = (
         (root / "story-pipeline-config.jsonc", CONFIG_TEMPLATE),
