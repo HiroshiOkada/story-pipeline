@@ -18,6 +18,7 @@ from story_pipeline.git_validation import (
     normalize_git_path,
 )
 from story_pipeline.validation import IssueCollector
+from story_pipeline.scaffold import SCAFFOLD_FILE_PATHS
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,18 @@ def commit_start_inputs(
         f"Record request {request_number:04d} input",
         body,
     )
+
+
+def commit_initial_scaffold(root: Path) -> str:
+    """検証済み scaffold の既知ファイルだけを初期 commit に保存する。"""
+    commit = commit_explicit_paths(
+        root,
+        SCAFFOLD_FILE_PATHS,
+        "Initialize story project",
+    )
+    if commit is None:
+        raise _git_error("初期 commit の対象がありません", root)
+    return commit
 
 
 def commit_run_outputs(

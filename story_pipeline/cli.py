@@ -13,6 +13,7 @@ from story_pipeline.config import load_config
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
+from story_pipeline.git_safety import commit_initial_scaffold
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
@@ -161,6 +162,8 @@ def _init_project(raw_path: str) -> int:
                 "Git の導入状態と権限を確認してください。",
                 EXIT_GIT,
             )
+
+    commit_initial_scaffold(root)
 
     print(f"Initialized Story Pipeline project: {root}")
     print("Next request: requests/0000.md")
