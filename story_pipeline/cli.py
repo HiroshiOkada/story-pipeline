@@ -15,6 +15,7 @@ from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
+from story_pipeline.run_command import run_command
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
 from story_pipeline.status import determine_next_action, inspect_status
@@ -71,6 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _show_status()
         elif args.command == "validate":
             return _validate_project()
+        elif args.command == "run":
+            return run_command(output=sys.stdout, error_output=sys.stderr)
         return 0
     except StoryPipelineError as error:
         return _error(error.reason, error.location, error.action, error.exit_code)

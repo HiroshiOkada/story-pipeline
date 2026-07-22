@@ -89,6 +89,8 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
 
         run, current = _begin(start, run, "update_state")
         run = _finish(start, run, current, "completed", result=f"status={status}")
+        run, current = _begin(start, run, "write_report")
+        run = _finish(start, run, current, "completed", result="終了処理で報告を保存")
         run = finalize_run_record(
             run,
             status,
