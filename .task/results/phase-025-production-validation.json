@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "executed_on": "2026-07-22",
+  "model": "deepseek/deepseek-v4-flash:nitro",
+  "stories_completed": 3,
+  "passed": true,
+  "prior_cost_usd": "2.10",
+  "validation_cost_usd": "0.0386184661",
+  "total_cost_usd": "2.1386184661",
+  "totals": {
+    "wall_seconds": 606.085771530983,
+    "logical_calls": 67,
+    "transport_attempts": 67,
+    "draft_writer_calls": 3
+  },
+  "results": [
+    {
+      "story": 1,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 216.9133372430224,
+      "logical_calls": 22,
+      "transport_attempts": 22,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.0131577634"
+    },
+    {
+      "story": 2,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 179.87470464396756,
+      "logical_calls": 21,
+      "transport_attempts": 21,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.0118541587"
+    },
+    {
+      "story": 3,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 209.29772964399308,
+      "logical_calls": 24,
+      "transport_attempts": 24,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.0136065440"
+    }
+  ]
+}
