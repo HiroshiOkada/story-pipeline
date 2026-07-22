@@ -303,6 +303,18 @@ class ReportingAndNextRequestTests(unittest.TestCase):
         self.assertIn("episodes/0001.md", report)
         self.assertEqual(write_run_report(self.root, self.run, context), "requests/0000_agent.md")
 
+    def test_report_keeps_missing_usage_unknown_and_shows_zero_resume_regeneration(self) -> None:
+        run = dict(self.run)
+        run["resume_count"] = 1
+        report = render_run_report(
+            run,
+            ReportContext(request_summary="再開", kind="continue"),
+        )
+
+        self.assertIn("total_tokens=unknown", report)
+        self.assertIn("再開後 knowledge 再生成: 0", report)
+        self.assertIn("retry_wait_ms=0", report)
+
     def test_next_request_uses_maximum_request_or_report_number(self) -> None:
         (self.root / "requests/0001_agent.md").write_text("report", encoding="utf-8")
         relative = create_next_request(self.root)

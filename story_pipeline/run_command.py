@@ -164,5 +164,13 @@ def _print_result(
     counts = result.run["call_counts"]
     names = ("generation", "review", "revision", "knowledge", "summary")
     print("Calls: " + ", ".join(f"{name}={counts.get(name, 0)}" for name in names), file=target)
+    metrics = result.run.get("metrics")
+    if isinstance(metrics, dict):
+        print(
+            "Performance: "
+            f"logical={metrics['logical_calls']}, transport={metrics['transport_attempts']}, "
+            f"retry_wait_ms={metrics['retry_wait_ms']}, elapsed_ms={metrics['elapsed_ms']}",
+            file=target,
+        )
     print(f"Report: {report}", file=target)
     print(f"Next request: {next_request}", file=target)
