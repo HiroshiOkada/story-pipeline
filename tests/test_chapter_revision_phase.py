@@ -11,7 +11,10 @@ from story_pipeline.chapter_revision import (
     DEFAULT_CHAPTER_REVISION_CONTEXT,
     build_chapter_revision_context,
     chapter_evaluation_response_format,
+    chapter_revision_response_format,
+    check_chapter_revision_candidate,
     parse_chapter_evaluation,
+    parse_chapter_revision_candidate,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -93,6 +96,40 @@ class ChapterRevisionContextTest(unittest.TestCase):
         schema = chapter_evaluation_response_format()["json_schema"]["schema"]
         self.assertEqual(set(schema["properties"]["scores"]["required"]), set(CHAPTER_SCORE_NAMES))
         self.assertFalse(schema["additionalProperties"])
+
+    def test_local_revision_changes_only_unique_quote_in_target_episode(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        payload = {"revisions": [{
+            "path": "episodes/0001.md", "original": "本文1", "replacement": "改稿本文1",
+            "rationale": "人物変化を明確にする",
+        }]}
+        candidate = parse_chapter_revision_candidate(
+            json.dumps(payload, ensure_ascii=False), generation=1,
+            model_reference="mock", input_hashes=context.input_hashes,
+        )
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        checked = check_chapter_revision_candidate(candidate, context, originals)
+        self.assertTrue(checked.accepted)
+        self.assertIn("改稿本文1", dict(checked.documents)["episodes/0001.md"])
+        self.assertEqual(dict(checked.documents)["episodes/0002.md"], dict(originals)["episodes/0002.md"])
+
+    def test_local_revision_rejects_out_of_scope_and_non_unique_quote(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        payload = {"revisions": [
+            {"path": "episodes/0003.md", "original": "本文", "replacement": "改稿", "rationale": "対象外"},
+            {"path": "episodes/0001.md", "original": "話", "replacement": "章", "rationale": "複数一致"},
+        ]}
+        candidate = parse_chapter_revision_candidate(
+            json.dumps(payload, ensure_ascii=False), generation=1, model_reference="mock", input_hashes=(),
+        )
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        codes = {issue.code for issue in check_chapter_revision_candidate(candidate, context, originals).issues}
+        self.assertEqual(codes, {"TARGET_OUT_OF_SCOPE", "ORIGINAL_NOT_UNIQUE"})
+
+    def test_revision_schema_rejects_unknown_fields(self) -> None:
+        schema = chapter_revision_response_format()["json_schema"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["properties"]["revisions"]["minItems"], 1)
 
 
 if __name__ == "__main__":
