@@ -168,6 +168,57 @@ class RequestScopeTest(unittest.TestCase):
         scope = determine_work_scope(self.root, self.state, interpretation)
         self.assertEqual(scope.action, "create_episode_plan")
 
+    def test_standard_scope_prioritizes_chapter_revision_over_next_episode(self) -> None:
+        interpretation = parse_request_interpretation(
+            json.dumps(interpretation_value()), self.request.read_text()
+        )
+        for relative in (
+            "concept.md",
+            "world.md",
+            "characters.md",
+            "style.md",
+            "canon.md",
+            "plot.md",
+            "chapters/0001.md",
+            "episode_plans/0001.md",
+            "episodes/0001.md",
+        ):
+            (self.root / relative).write_text(f"# {relative}\n")
+        self.state.update(
+            phase="chapter_revision",
+            current_chapter=1,
+            next_episode=2,
+            completed_episodes=[1],
+        )
+
+        scope = determine_work_scope(self.root, self.state, interpretation)
+
+        self.assertEqual(scope.phase, "chapter_revision")
+        self.assertEqual(scope.action, "review_chapter")
+        self.assertEqual(scope.targets, ("chapters/0001.md",))
+
+    def test_standard_scope_prioritizes_final_revision_over_next_episode(self) -> None:
+        interpretation = parse_request_interpretation(
+            json.dumps(interpretation_value()), self.request.read_text()
+        )
+        for relative in (
+            "concept.md",
+            "world.md",
+            "characters.md",
+            "style.md",
+            "canon.md",
+            "plot.md",
+            "chapters/0001.md",
+        ):
+            (self.root / relative).write_text(f"# {relative}\n")
+        self.state.update(phase="final_revision", current_chapter=1, next_episode=2)
+
+        scope = determine_work_scope(self.root, self.state, interpretation)
+
+        self.assertEqual(scope.phase, "final_revision")
+        self.assertEqual(scope.action, "review_novel")
+        self.assertEqual(scope.targets, ("novel",))
+
     def test_context_has_path_hash_boundaries_and_fixed_message_order(self) -> None:
         selected = select_request(self.root, self.state)
         messages = build_interpretation_messages(self.root, selected)

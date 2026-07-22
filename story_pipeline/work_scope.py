@@ -75,6 +75,14 @@ def _standard_scope(
             phase = "final_revision"
         return WorkScope(phase, f"review_{target_type}", (target,), 1, interpretation.requested_until)
 
+    # 章・作品全体の終端処理では next_episode が次話を指していても、
+    # 状態機械が確定したフェーズを優先する。
+    if state["phase"] == "chapter_revision":
+        return WorkScope("chapter_revision", "review_chapter", (chapter_path,), 1, interpretation.requested_until)
+    if state["phase"] in {"final_revision", "completed"}:
+        action = "report_completed" if state["phase"] == "completed" else "review_novel"
+        return WorkScope(state["phase"], action, ("novel",), 1, interpretation.requested_until)
+
     episode_number = state["next_episode"]
     plan = f"episode_plans/{episode_number:04d}.md"
     episode = f"episodes/{episode_number:04d}.md"
@@ -94,11 +102,6 @@ def _standard_scope(
             interpretation.requested_units,
             interpretation.requested_until,
         )
-    if state["phase"] == "chapter_revision":
-        return WorkScope("chapter_revision", "review_chapter", (chapter_path,), 1, interpretation.requested_until)
-    if state["phase"] in {"final_revision", "completed"}:
-        action = "report_completed" if state["phase"] == "completed" else "review_novel"
-        return WorkScope(state["phase"], action, ("novel",), 1, interpretation.requested_until)
     raise _scope_error("状態と実ファイルから次の制作単位を一意に決定できません")
 
 
