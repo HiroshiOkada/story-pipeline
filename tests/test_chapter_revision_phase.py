@@ -13,8 +13,12 @@ from story_pipeline.chapter_revision import (
     chapter_evaluation_response_format,
     chapter_revision_response_format,
     check_chapter_revision_candidate,
+    EvaluatedChapterRevision,
+    build_chapter_revision_messages,
     parse_chapter_evaluation,
     parse_chapter_revision_candidate,
+    run_chapter_revision_loop,
+    select_best_chapter_revision,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -130,6 +134,49 @@ class ChapterRevisionContextTest(unittest.TestCase):
         schema = chapter_revision_response_format()["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["revisions"]["minItems"], 1)
+
+    def test_revision_loop_rechecks_and_selects_completed_candidate(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        scores = {name: 4 for name in CHAPTER_SCORE_NAMES}
+        revise_evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "revise", "complete": False, "reason": "反復がある",
+            "summary": "改稿が必要", "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        accepted_payload = {
+            "decision": "accept", "complete": True, "reason": "章として完結",
+            "summary": "採用可能", "issues": [], "scores": scores, "human_decision": None,
+        }
+        accepted = parse_chapter_evaluation(json.dumps(accepted_payload, ensure_ascii=False))
+        originals = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        initial = EvaluatedChapterRevision(None, originals, revise_evaluation)
+
+        def revise(current, count):
+            messages = build_chapter_revision_messages(context, current)
+            self.assertIn("BEGIN CHAPTER EPISODES", messages[-3]["content"])
+            candidate = parse_chapter_revision_candidate(json.dumps({"revisions": [{
+                "path": "episodes/0001.md", "original": "本文1", "replacement": "改稿本文1",
+                "rationale": "反復を解消",
+            }]}, ensure_ascii=False), generation=count, model_reference="mock", input_hashes=(), revision_count=count)
+            checked = check_chapter_revision_candidate(candidate, context, current.documents)
+            self.assertTrue(checked.accepted)
+            return candidate, checked.documents
+
+        records = run_chapter_revision_loop(initial, 2, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertIs(select_best_chapter_revision(records), records[-1])
+
+    def test_best_candidate_prefers_fewer_revisions_after_scores(self) -> None:
+        scores = {name: 5 for name in CHAPTER_SCORE_NAMES}
+        evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        candidate = parse_chapter_revision_candidate(json.dumps({"revisions": [{
+            "path": "episodes/0001.md", "original": "A", "replacement": "B", "rationale": "修正",
+        }]}), generation=2, model_reference="mock", input_hashes=(), revision_count=1)
+        original = EvaluatedChapterRevision(None, (), evaluation)
+        revised = EvaluatedChapterRevision(candidate, (), evaluation)
+        self.assertIs(select_best_chapter_revision((revised, original)), original)
 
 
 if __name__ == "__main__":

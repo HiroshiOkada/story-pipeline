@@ -107,6 +107,17 @@ class ChapterRevisionMechanicalCheck:
         return not self.issues
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedChapterRevision:
+    candidate: ChapterRevisionCandidate | None
+    documents: tuple[tuple[str, str], ...]
+    evaluation: ChapterEvaluation
+
+    @property
+    def revision_count(self) -> int:
+        return 0 if self.candidate is None else self.candidate.revision_count
+
+
 CHAPTER_SCORE_NAMES = (
     "request_fit", "pacing", "repetition", "cast_balance", "timeline",
     "viewpoint", "foreshadowing", "character_arc",
@@ -343,6 +354,89 @@ def check_chapter_revision_candidate(
             ))
     ordered = tuple((path, documents[path]) for path, _ in original_documents)
     return ChapterRevisionMechanicalCheck(ordered, tuple(issues))
+
+
+def build_chapter_revision_messages(
+    context: ChapterRevisionContext,
+    current: EvaluatedChapterRevision,
+) -> tuple[dict[str, str], ...]:
+    """評価済み本文と問題だけを局所改稿役へ渡す。"""
+    document_data = json.dumps(
+        [{"path": path, "content": content} for path, content in current.documents],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    evaluation_data = json.dumps({
+        "decision": current.evaluation.decision,
+        "complete": current.evaluation.complete,
+        "reason": current.evaluation.reason,
+        "issues": [
+            {
+                "severity": issue.severity, "category": issue.category,
+                "location": issue.location, "evidence": issue.evidence,
+                "instruction": issue.instruction,
+            } for issue in current.evaluation.issues
+        ],
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(document_data.encode("utf-8")).hexdigest()
+    return (
+        {
+            "role": "system",
+            "content": (
+                "あなたは Story Pipeline の章 reviser です。指摘箇所だけを一意な原文引用と置換文で"
+                "局所改稿します。章構成、話順、主要展開の変更はせず、応答は指定 JSON object だけにします。"
+            ),
+        },
+        *context.messages[1:4],
+        {
+            "role": "user",
+            "content": (
+                f"現在の章内本文:\n--- BEGIN CHAPTER EPISODES sha256={digest} ---\n"
+                f"{document_data}\n--- END CHAPTER EPISODES sha256={digest} ---"
+            ),
+        },
+        {"role": "user", "content": "評価結果（データ）:\n" + evaluation_data},
+        {
+            "role": "user",
+            "content": (
+                "error と修正価値の高い warning を解消する最小限の revisions を返してください。"
+                "各 original は対象ファイルに1回だけ完全一致する連続文字列にしてください。"
+            ),
+        },
+    )
+
+
+def run_chapter_revision_loop(
+    initial: EvaluatedChapterRevision,
+    maximum_revisions: int,
+    revise: Callable[[EvaluatedChapterRevision, int], tuple[ChapterRevisionCandidate, tuple[tuple[str, str], ...]]],
+    evaluate: Callable[[tuple[tuple[str, str], ...]], ChapterEvaluation],
+) -> tuple[EvaluatedChapterRevision, ...]:
+    """完成、判断待ち、上限到達まで局所改稿と再評価を繰り返す。"""
+    if maximum_revisions < 0:
+        raise ValueError("maximum_revisions は0以上である必要があります")
+    records = [initial]
+    while (
+        not records[-1].evaluation.adoptable
+        and records[-1].evaluation.decision != "awaiting_human"
+        and len(records) - 1 < maximum_revisions
+    ):
+        candidate, documents = revise(records[-1], len(records))
+        records.append(EvaluatedChapterRevision(candidate, documents, evaluate(documents)))
+    return tuple(records)
+
+
+def select_best_chapter_revision(
+    candidates: list[EvaluatedChapterRevision] | tuple[EvaluatedChapterRevision, ...],
+) -> EvaluatedChapterRevision | None:
+    """完成判定済み候補だけから決定的に最良版を選ぶ。"""
+    adoptable = [candidate for candidate in candidates if candidate.evaluation.adoptable]
+    if not adoptable:
+        return None
+    return max(adoptable, key=lambda item: (
+        item.evaluation.score("request_fit"),
+        sum(score for _, score in item.evaluation.scores),
+        -item.revision_count,
+    ))
 
 
 def _parse_human_decision(value: Any) -> ChapterDecision | None:
