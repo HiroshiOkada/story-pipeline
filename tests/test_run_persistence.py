@@ -102,6 +102,40 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(resumed["started_at"], NOW)
         self.assertEqual(resumed["status"], "running")
         self.assertIsNone(resumed["finished_at"])
+        self.assertEqual(resumed["resume_count"], 1)
+        self.assertEqual(resumed["request_revisions"][0]["sha256"], "b" * 64)
+
+    def test_request_revision_updates_current_hash_and_preserves_initial_boundary(self) -> None:
+        run = finalize_run_record(
+            self.make_run(), "failed", resume_step="generate", resume_reason="temporary", now=LATER
+        )
+        resumed = resume_run_record(
+            run,
+            step="interpret_request",
+            reason="要求が改訂されました",
+            request_sha256="c" * 64,
+            input_commit="d" * 40,
+            now="2026-07-22T01:25:45Z",
+        )
+
+        self.assertEqual(resumed["schema_version"], 2)
+        self.assertEqual(resumed["request_sha256"], "c" * 64)
+        self.assertEqual(resumed["start_commit"], COMMIT)
+        self.assertEqual(resumed["started_at"], NOW)
+        self.assertEqual(resumed["request_revisions"][-1]["input_commit"], "d" * 40)
+
+    def test_version_one_record_is_migrated_without_losing_initial_values(self) -> None:
+        run = self.make_run()
+        run["schema_version"] = 1
+        run.pop("request_revisions")
+        run.pop("resume_count")
+
+        migrated = validate_run_data(run, 0)
+
+        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["request_revisions"][0]["sha256"], "b" * 64)
+        self.assertEqual(migrated["request_revisions"][0]["input_commit"], COMMIT)
+        self.assertEqual(migrated["resume_count"], 0)
 
     def test_cannot_finalize_with_running_step(self) -> None:
         run = start_step(self.make_run(), "generate", now=NOW)
@@ -217,4 +251,3 @@ class ReportingAndNextRequestTests(unittest.TestCase):
         (self.root / "requests/0001.md").symlink_to(self.root / "requests/0000.md")
         with self.assertRaises(StoryPipelineError):
             create_next_request(self.root)
-

@@ -17,12 +17,13 @@ COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 RUN_STATUSES = {"running", "completed", "failed", "awaiting_human"}
 STEP_STATUSES = {"pending", "running", "completed", "failed", "skipped"}
-RUN_KEYS = {
+RUN_KEYS_V1 = {
     "schema_version", "request_number", "status", "started_at", "updated_at",
     "finished_at", "request_sha256", "start_commit", "end_commit", "current_step",
     "steps", "call_counts", "model_attempts", "input_hashes", "output_hashes",
     "restored_files", "fallbacks", "errors", "resume",
 }
+RUN_KEYS_V2 = RUN_KEYS_V1 | {"request_revisions", "resume_count"}
 
 
 class RunFormatError(ValueError):
@@ -81,9 +82,14 @@ def validate_run_data(
 ) -> dict[str, Any]:
     """メモリ上の run 値をファイル読み込み時と同じ契約で検証する。"""
     run = _object(run, location)
-    _keys(run, RUN_KEYS, location)
-    if _integer(run["schema_version"], f"{location}#/schema_version") != 1:
-        _fail("schema_version は 1 である必要があります", f"{location}#/schema_version")
+    version = _integer(run.get("schema_version"), f"{location}#/schema_version")
+    if version == 1:
+        _keys(run, RUN_KEYS_V1, location)
+        run = _migrate_v1(run)
+    elif version == 2:
+        _keys(run, RUN_KEYS_V2, location)
+    else:
+        _fail("schema_version は 1 または 2 である必要があります", f"{location}#/schema_version")
     number = _bounded_integer(run["request_number"], f"{location}#/request_number", 0, 9999)
     if number != filename_number:
         _fail("request_number がファイル名と一致しません", f"{location}#/request_number")
@@ -116,7 +122,49 @@ def validate_run_data(
         _relative_path(_string(item, f"{location}#/restored_files/{index}"), f"{location}#/restored_files/{index}")
     _validate_errors(run["errors"], location)
     _validate_resume(run["resume"], location)
+    _bounded_integer(run["resume_count"], f"{location}#/resume_count", 0, 2**63 - 1)
+    _validate_request_revisions(run, location)
     return run
+
+
+def _migrate_v1(run: dict[str, Any]) -> dict[str, Any]:
+    """v1 の初回入力境界を失わず、メモリ上の v2 表現へ補完する。"""
+    migrated = dict(run)
+    migrated["schema_version"] = 2
+    migrated["resume_count"] = 0
+    migrated["request_revisions"] = [
+        {
+            "sha256": run["request_sha256"],
+            "input_commit": run["start_commit"],
+            "accepted_at": run["started_at"],
+            "applies_from_step": "interpret_request",
+        }
+    ]
+    return migrated
+
+
+def _validate_request_revisions(run: dict[str, Any], location: str) -> None:
+    revisions = _array(run["request_revisions"], f"{location}#/request_revisions")
+    if not revisions:
+        _fail("少なくとも初回要求の revision が必要です", f"{location}#/request_revisions")
+    for index, value in enumerate(revisions):
+        item_location = f"{location}#/request_revisions/{index}"
+        revision = _object(value, item_location)
+        _keys(
+            revision,
+            {"sha256", "input_commit", "accepted_at", "applies_from_step"},
+            item_location,
+        )
+        _hash(revision["sha256"], f"{item_location}/sha256")
+        _pattern_string(revision["input_commit"], COMMIT, f"{item_location}/input_commit")
+        _timestamp(revision["accepted_at"], f"{item_location}/accepted_at")
+        if not _string(revision["applies_from_step"], f"{item_location}/applies_from_step"):
+            _fail("空でない工程名が必要です", f"{item_location}/applies_from_step")
+    if revisions[-1]["sha256"] != run["request_sha256"]:
+        _fail(
+            "最新 revision の SHA-256 が request_sha256 と一致しません",
+            f"{location}#/request_sha256",
+        )
 
 
 def _validate_steps(value: Any, location: str) -> None:
