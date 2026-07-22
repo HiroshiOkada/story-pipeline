@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import random
+import threading
 import time
 from typing import Any
 
@@ -60,6 +61,8 @@ class LLMClient:
         notify: Callable[[str], None] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         utc_now: Callable[[], datetime] | None = None,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
+        heartbeat_interval_seconds: float = 30.0,
     ) -> None:
         self.config = config
         self.environment = environment
@@ -69,6 +72,17 @@ class LLMClient:
         self.notify = notify or (lambda _: None)
         self.monotonic = monotonic
         self.utc_now = utc_now or (lambda: datetime.now(timezone.utc))
+        self.event_sink = event_sink or (lambda _: None)
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._events: list[dict[str, Any]] = []
+        self._event_lock = threading.Lock()
+
+    def drain_events(self) -> tuple[dict[str, Any], ...]:
+        """現在までの構造化イベントを取り出し、内部 buffer を空にする。"""
+        with self._event_lock:
+            events = tuple(self._events)
+            self._events.clear()
+        return events
 
     def complete_role(
         self,
@@ -86,6 +100,10 @@ class LLMClient:
         for reference in references:
             if previous is not None and last_failure is not None:
                 fallbacks.append(FallbackEvent(previous, reference, last_failure.kind))
+                self._emit("fallback", {
+                    "role": role, "source": previous, "target": reference,
+                    "failure_kind": last_failure.kind,
+                })
             try:
                 response, attempts, measured = self._complete_model(reference, messages, response_format)
                 total_attempts += attempts
@@ -141,6 +159,19 @@ class LLMClient:
         for attempt in range(1, maximum_attempts + 1):
             started_at = _timestamp(self.utc_now())
             started = self.monotonic()
+            self._emit("transport_started", {
+                "model_reference": reference,
+                "api_model": model["model"],
+                "attempt": attempt,
+                "maximum_attempts": maximum_attempts,
+            })
+            stop_heartbeat = threading.Event()
+            heartbeat = threading.Thread(
+                target=self._heartbeat,
+                args=(stop_heartbeat, reference, model["model"], attempt, started),
+                daemon=True,
+            )
+            heartbeat.start()
             try:
                 response = self.transport.complete(
                         base_url=provider["base_url"],
@@ -152,6 +183,8 @@ class LLMClient:
                         timeout=self.config["request"]["timeout_seconds"],
                         response_format=response_format,
                 )
+                stop_heartbeat.set()
+                heartbeat.join()
                 finished = self.monotonic()
                 measured.append(TransportAttempt(
                     reference,
@@ -165,9 +198,20 @@ class LLMClient:
                     None,
                     0,
                 ))
+                self._emit("transport_completed", {
+                    "model_reference": reference, "api_model": model["model"],
+                    "attempt": attempt, "elapsed_ms": _milliseconds(finished - started),
+                })
                 return response, attempt, tuple(measured)
             except ApiFailure as failure:
+                stop_heartbeat.set()
+                heartbeat.join()
                 finished = self.monotonic()
+                self._emit("transport_failed", {
+                    "model_reference": reference, "api_model": model["model"],
+                    "attempt": attempt, "elapsed_ms": _milliseconds(finished - started),
+                    "failure_kind": failure.kind,
+                })
                 can_remove = (
                     failure.kind == "unsupported_parameter"
                     and not removed_parameter
@@ -201,8 +245,42 @@ class LLMClient:
                     "failed", failure.kind, _milliseconds(delay),
                 ))
                 self.notify(f"Retrying {reference} after {delay:.1f}s: {failure.kind}")
+                self._emit("retry_wait", {
+                    "model_reference": reference, "attempt": attempt,
+                    "failure_kind": failure.kind, "wait_ms": _milliseconds(delay),
+                })
                 self.sleep(delay)
+            except BaseException:
+                stop_heartbeat.set()
+                heartbeat.join()
+                raise
         raise AssertionError("通信試行ループが結果を返しませんでした")
+
+    def _heartbeat(
+        self,
+        stop: threading.Event,
+        reference: str,
+        api_model: str,
+        attempt: int,
+        started: float,
+    ) -> None:
+        while not stop.wait(self.heartbeat_interval_seconds):
+            self._emit("heartbeat", {
+                "model_reference": reference,
+                "api_model": api_model,
+                "attempt": attempt,
+                "elapsed_ms": _milliseconds(self.monotonic() - started),
+            })
+
+    def _emit(self, kind: str, details: dict[str, Any]) -> None:
+        event = {
+            "kind": kind,
+            "occurred_at": _timestamp(self.utc_now()),
+            "details": details,
+        }
+        with self._event_lock:
+            self._events.append(event)
+        self.event_sink(event)
 
 
 @dataclass(frozen=True, slots=True)

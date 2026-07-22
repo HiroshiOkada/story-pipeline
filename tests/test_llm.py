@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from urllib.error import HTTPError
 
@@ -217,6 +218,29 @@ class LLMClientTest(unittest.TestCase):
         self.assertEqual(result.transport_attempts[0].failure_kind, "temporary")
         self.assertEqual(result.transport_attempts[1].elapsed_ms, 125)
         self.assertEqual(result.transport_attempts[1].result, "completed")
+
+    def test_long_transport_emits_secret_free_heartbeat(self) -> None:
+        class SlowTransport:
+            def complete(self, **_: object) -> ChatResponse:
+                time.sleep(0.035)
+                return ChatResponse("done", "a", "stop")
+
+        events: list[dict[str, object]] = []
+        client = LLMClient(
+            self.config(),
+            {"KEY": "top-secret"},
+            transport=SlowTransport(),
+            event_sink=events.append,
+            heartbeat_interval_seconds=0.01,
+        )
+
+        client.complete_role("writer", [{"role": "user", "content": "top-secret"}])
+
+        heartbeats = [item for item in events if item["kind"] == "heartbeat"]
+        self.assertGreaterEqual(len(heartbeats), 3)
+        self.assertNotIn("top-secret", json.dumps(events))
+        self.assertEqual(tuple(events), client.drain_events())
+        self.assertEqual(client.drain_events(), ())
 
     def test_unsupported_config_parameter_is_removed_once(self) -> None:
         transport = SequenceTransport(

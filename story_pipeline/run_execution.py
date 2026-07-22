@@ -22,6 +22,7 @@ from story_pipeline.run_lifecycle import (
     finalize_run_record,
     finish_step,
     record_model_attempt,
+    record_event,
     start_step,
     utc_timestamp,
 )
@@ -138,6 +139,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
             run, state, planned, workflow, changed, workflow.reason, 8 if status == "awaiting_human" else 7 if status == "failed" else 0
         )
     except (StoryPipelineError, ApiFailure, Exception) as error:
+        run = _record_client_events(start, run, current)
         if isinstance(error, StoryPipelineError):
             code = error.exit_code
             message = error.reason
@@ -177,6 +179,7 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
     normalized = "summary" if category == "summary" else category
     if normalized not in {"generation", "review", "revision", "knowledge"}:
         normalized = "generation"
+    run = _record_client_events(start, run, run["current_step"])
     timestamp = utc_timestamp()
     model = start.config["models"][completion.model_reference]["model"]
     fallbacks = tuple(
@@ -194,8 +197,50 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
         result="completed",
         attempts=completion.attempts,
         fallbacks=fallbacks,
+        transport_attempts=tuple({
+            "model_reference": item.model_reference,
+            "api_model": item.api_model,
+            "attempt": item.attempt,
+            "maximum_attempts": item.maximum_attempts,
+            "started_at": item.started_at,
+            "finished_at": item.finished_at,
+            "elapsed_ms": item.elapsed_ms,
+            "result": item.result,
+            "failure_kind": item.failure_kind,
+            "wait_ms": item.wait_ms,
+        } for item in completion.transport_attempts),
+        usage=(
+            {
+                "prompt_tokens": completion.response.usage.prompt_tokens,
+                "completion_tokens": completion.response.usage.completion_tokens,
+                "total_tokens": completion.response.usage.total_tokens,
+                "cached_tokens": completion.response.usage.cached_tokens,
+                "reasoning_tokens": completion.response.usage.reasoning_tokens,
+            }
+            if completion.response.usage is not None else None
+        ),
     )
     persist_run_progress(start.root, updated)
+    return updated
+
+
+def _record_client_events(
+    start: RunStart, run: dict[str, Any], step: str
+) -> dict[str, Any]:
+    drain = getattr(start.client, "drain_events", None)
+    if drain is None:
+        return run
+    updated = run
+    for event in drain():
+        updated = record_event(
+            updated,
+            kind=event["kind"],
+            step=step,
+            details=event["details"],
+            now=event["occurred_at"],
+        )
+    if updated is not run:
+        persist_run_progress(start.root, updated)
     return updated
 
 

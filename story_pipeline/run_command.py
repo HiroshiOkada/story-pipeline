@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TextIO
 
@@ -19,6 +20,10 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
     if start is None:
         print("No pending request.", file=output)
         return 0
+    if hasattr(start.client, "event_sink"):
+        start.client.event_sink = lambda event: print(
+            json.dumps(event, ensure_ascii=False, sort_keys=True), file=error_output, flush=True
+        )
     try:
         result = execute_started_run(start)
         report = _write_report(start.root, result)
