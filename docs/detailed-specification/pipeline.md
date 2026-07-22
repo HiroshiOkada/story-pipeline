@@ -39,7 +39,9 @@
 }
 ```
 
-`kind` は `create`、`continue`、`modify`、`add`、`reconsider`、`answer`、`mixed` のいずれかとする。対象ファイルや番号は入力中に明示されたものだけを構造化し、推測した対象は `ambiguities` に入れる。
+`kind` は `create`、`continue`、`modify`、`add`、`reconsider`、`answer`、`mixed` のいずれかとする。`create`、`continue`、`answer` の `targets` は空配列とし、planner が標準工程の対象を補ってもパーサーが空へ正規化する。実際の対象は状態と採用済み成果物から決定する。
+
+`modify`、`add`、`reconsider` と変更対象を伴う `mixed` では、入力中に文字列として明示された安全な作品ルート相対パスだけを `targets` に保持する。対象が欠ける、推測が必要、または管理対象外の場合は人間判断で停止する。変更対象を伴わない `mixed` の `targets` は空配列とする。
 
 ### 2.2 曖昧さと矛盾
 
