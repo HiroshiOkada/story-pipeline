@@ -88,6 +88,45 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(run["steps"][0]["status"], "completed")
         self.assertEqual(validate_run_data(run, 0), run)
 
+    def test_records_detailed_transport_usage_and_validates_metrics(self) -> None:
+        run = record_model_attempt(
+            self.make_run(),
+            category="generation",
+            role="writer",
+            model_reference="fast",
+            api_model="deepseek/example",
+            started_at=NOW,
+            finished_at=LATER,
+            result="completed",
+            attempts=2,
+            transport_attempts=(
+                {
+                    "model_reference": "fast", "api_model": "deepseek/example",
+                    "attempt": 1, "maximum_attempts": 2, "started_at": NOW,
+                    "finished_at": NOW, "elapsed_ms": 100, "result": "failed",
+                    "failure_kind": "temporary", "wait_ms": 500,
+                },
+                {
+                    "model_reference": "fast", "api_model": "deepseek/example",
+                    "attempt": 2, "maximum_attempts": 2, "started_at": NOW,
+                    "finished_at": LATER, "elapsed_ms": 200, "result": "completed",
+                    "failure_kind": None, "wait_ms": 0,
+                },
+            ),
+            usage={
+                "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
+                "cached_tokens": None, "reasoning_tokens": 5,
+            },
+        )
+
+        self.assertEqual(run["metrics"]["transport_attempts"], 2)
+        self.assertEqual(run["metrics"]["retry_wait_ms"], 500)
+        self.assertEqual(run["metrics"]["usage"]["total_tokens"], 30)
+        self.assertEqual(validate_run_data(run, 0), run)
+        run["metrics"]["usage"]["total_tokens"] = 31
+        with self.assertRaises(ValueError):
+            validate_run_data(run, 0)
+
     def test_failed_run_can_resume_without_resetting_counters(self) -> None:
         run = self.make_run()
         run = finalize_run_record(
@@ -118,7 +157,7 @@ class RunLifecycleTests(unittest.TestCase):
             now="2026-07-22T01:25:45Z",
         )
 
-        self.assertEqual(resumed["schema_version"], 2)
+        self.assertEqual(resumed["schema_version"], 3)
         self.assertEqual(resumed["request_sha256"], "c" * 64)
         self.assertEqual(resumed["start_commit"], COMMIT)
         self.assertEqual(resumed["started_at"], NOW)
@@ -150,10 +189,12 @@ class RunLifecycleTests(unittest.TestCase):
                 run["schema_version"] = 1
                 run.pop("request_revisions")
                 run.pop("resume_count")
+                for key in ("model_calls", "events", "incidents", "lifecycle", "metrics"):
+                    run.pop(key)
 
                 migrated = validate_run_data(run, index)
 
-                self.assertEqual(migrated["schema_version"], 2)
+                self.assertEqual(migrated["schema_version"], 3)
                 self.assertEqual(migrated["request_revisions"][0]["sha256"], request_hash)
                 self.assertEqual(migrated["request_revisions"][0]["input_commit"], input_commit)
                 self.assertEqual(migrated["resume_count"], 0)
