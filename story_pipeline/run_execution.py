@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import difflib
 from pathlib import Path
 from typing import Any
+import uuid
 
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.interruptions import TerminationSignal
 from story_pipeline.draft_checkpoint import (
     inspect_checkpoint_adoption,
     load_draft_checkpoint,
@@ -23,7 +25,9 @@ from story_pipeline.run_lifecycle import (
     finish_step,
     record_model_attempt,
     record_event,
+    record_incident,
     start_step,
+    transition_lifecycle,
     utc_timestamp,
 )
 from story_pipeline.run_start import RunStart
@@ -118,6 +122,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         run = _finish(start, run, current, "completed", result=f"status={status}")
         run, current = _begin(start, run, "write_report")
         run = _finish(start, run, current, "completed", result="終了処理で報告を保存")
+        run = transition_lifecycle(run, "finalizing")
         run = finalize_run_record(
             run,
             status,
@@ -138,27 +143,49 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         return RunExecutionResult(
             run, state, planned, workflow, changed, workflow.reason, 8 if status == "awaiting_human" else 7 if status == "failed" else 0
         )
-    except (StoryPipelineError, ApiFailure, Exception) as error:
+    except BaseException as error:
         run = _record_client_events(start, run, current)
-        if isinstance(error, StoryPipelineError):
+        if isinstance(error, (KeyboardInterrupt, TerminationSignal)):
+            code = 143 if isinstance(error, TerminationSignal) else 130
+            message = "実行が割り込まれました"
+            component = "interruption"
+        elif isinstance(error, StoryPipelineError):
             code = error.exit_code
             message = error.reason
+            component = "workflow" if current == "generate" else "execution"
         elif isinstance(error, ApiFailure):
             code = 8 if error.awaiting_human else 7
             message = error.message
+            component = "transport"
         else:
             code = 9
             message = "予期しない内部エラーが発生しました"
+            component = "finalizing" if run.get("status") != "running" else (
+                "workflow"
+            )
         status = "awaiting_human" if code == 8 else "failed"
-        run = _close_running_step(run, current, "failed", message)
-        run = finalize_run_record(
+        run = record_incident(
             run,
-            status,
-            resume_step=current if status == "failed" else None,
-            resume_reason=message if status == "failed" else None,
-            error={"step": current, "category": "execution", "message": message, "retryable": status == "failed"},
+            incident_id=f"inc-{uuid.uuid4().hex}",
+            component=component,
+            exception_class=type(error).__name__,
+            step=current,
+            retryable=code in {7, 9},
         )
-        state = persist_finished_execution(start.root, start.state, run)
+        if run.get("status") == "running":
+            run = _close_running_step(run, current, "failed", message)
+            run = transition_lifecycle(run, "finalizing")
+            run = finalize_run_record(
+                run,
+                status,
+                resume_step=current if status == "failed" else None,
+                resume_reason=message if status == "failed" else None,
+                error={"step": current, "category": component, "message": message, "retryable": status == "failed"},
+            )
+            state = persist_finished_execution(start.root, start.state, run)
+        else:
+            persist_run_progress(start.root, run)
+            state = start.state
         return RunExecutionResult(run, state, planned, workflow, (), message, code)
 
 

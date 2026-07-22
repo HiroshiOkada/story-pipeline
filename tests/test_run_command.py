@@ -15,6 +15,7 @@ from story_pipeline.cli import main
 from story_pipeline.config import load_config
 from story_pipeline.llm_client import CompletionResult
 from story_pipeline.llm_transport import ApiFailure, ChatResponse
+from story_pipeline.interruptions import TerminationSignal
 from story_pipeline.run_command import run_command
 from story_pipeline.run_start import prepare_run
 from story_pipeline.scaffold import create_scaffold
@@ -301,9 +302,72 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(code, 9)
         self.assertEqual(run["status"], "failed")
         self.assertEqual(run["errors"][-1]["message"], "予期しない内部エラーが発生しました")
-        self.assertNotIn("RuntimeError", json.dumps(run, ensure_ascii=False))
+        self.assertEqual(run["incidents"][-1]["exception_class"], "RuntimeError")
+        self.assertEqual(run["incidents"][-1]["component"], "workflow")
         self.assertNotIn("保存してはいけない", errors.getvalue())
         self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
+
+    def test_report_failure_records_finalizing_incident(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
+        errors = io.StringIO()
+        with (
+            patch("story_pipeline.run_start.LLMClient", return_value=fake),
+            patch("story_pipeline.run_command._write_report", side_effect=OSError("secret path")),
+        ):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        run = self._run_record()
+        self.assertEqual(code, 9)
+        self.assertEqual(run["incidents"][-1]["component"], "finalizing")
+        self.assertEqual(run["incidents"][-1]["exception_class"], "OSError")
+        self.assertNotIn("secret path", errors.getvalue())
+
+    def test_git_failure_records_git_incident(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
+        with (
+            patch("story_pipeline.run_start.LLMClient", return_value=fake),
+            patch("story_pipeline.run_command.commit_run_outputs", side_effect=RuntimeError("git secret")),
+        ):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+
+        run = self._run_record()
+        self.assertEqual(code, 9)
+        self.assertEqual(run["incidents"][-1]["component"], "git")
+        self.assertFalse(run["incidents"][-1]["retryable"])
+
+    def test_sigint_is_recorded_as_interruption(self) -> None:
+        self._assert_interruption(KeyboardInterrupt(), 130)
+
+    def test_sigterm_is_distinct_from_sigint(self) -> None:
+        self._assert_interruption(TerminationSignal(), 143)
+
+    def test_lock_release_failure_is_a_secondary_incident(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
+        with (
+            patch("story_pipeline.run_start.LLMClient", return_value=fake),
+            patch("story_pipeline.run_lock.RunLock.release", side_effect=OSError("lock secret")),
+        ):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+
+        incident = self._run_record()["incidents"][-1]
+        self.assertEqual(code, 9)
+        self.assertEqual(incident["component"], "lock")
+        self.assertEqual(incident["step"], "release_lock")
+        (self.root / ".story-pipeline/run.lock").unlink(missing_ok=True)
+
+    def _assert_interruption(self, error: BaseException, expected_code: int) -> None:
+        class InterruptedClient(FakeClient):
+            def complete_role(self, *_: object, **__: object) -> CompletionResult:
+                raise error
+
+        fake = InterruptedClient(self._config(), [])
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+
+        incident = self._run_record()["incidents"][-1]
+        self.assertEqual(code, expected_code)
+        self.assertEqual(incident["component"], "interruption")
+        self.assertEqual(incident["exception_class"], type(error).__name__)
 
     def test_connection_failure_preserves_human_input_and_releases_lock(self) -> None:
         failure = ApiFailure("authentication", "認証失敗", 401)

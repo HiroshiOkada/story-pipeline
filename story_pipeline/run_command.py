@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import TextIO
+import uuid
 
 from story_pipeline.git_safety import commit_run_outputs
 from story_pipeline.next_request import create_next_request
 from story_pipeline.request_selection import has_meaningful_request_content
 from story_pipeline.run_execution import RunExecutionResult, execute_started_run
 from story_pipeline.run_report import FileChange, ReportContext, write_run_report
+from story_pipeline.execution_store import persist_run_progress
+from story_pipeline.run_lifecycle import record_incident, transition_lifecycle
 from story_pipeline.run_start import prepare_run
+from story_pipeline.interruptions import TerminationSignal, capture_sigterm
 
 
 def run_command(*, output: TextIO, error_output: TextIO) -> int:
@@ -24,27 +28,97 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
         start.client.event_sink = lambda event: print(
             json.dumps(event, ensure_ascii=False, sort_keys=True), file=error_output, flush=True
         )
+    result: RunExecutionResult | None = None
+    report: str | None = None
+    next_request: str | None = None
+    code = 9
     try:
-        result = execute_started_run(start)
-        report = _write_report(start.root, result)
+        with capture_sigterm():
+            result = execute_started_run(start)
+        try:
+            report = _write_report(start.root, result)
+        except BaseException as error:
+            result = _finalization_failure(start.root, result, error, "finalizing", "write_report")
+            _print_incident(result, error_output)
+            return _interruption_code(error) or 9
         managed = tuple(dict.fromkeys((
             *result.changed_files,
             ".story-pipeline/state.json",
             f".story-pipeline/runs/{start.request.number:04d}.json",
             report,
         )))
-        commit_run_outputs(
-            start.root,
-            start.request.number,
-            result.run["status"].replace("_", "-"),
-            managed,
-            body=(f"Phase: {result.workflow.phase if result.workflow else 'unknown'}",),
+        result = RunExecutionResult(
+            transition_lifecycle(result.run, "committed"), result.state, result.planned,
+            result.workflow, result.changed_files, result.reason, result.exit_code,
         )
-        next_request = _next_request(start.root, start.request.number)
+        persist_run_progress(start.root, result.run)
+        try:
+            commit_run_outputs(
+                start.root,
+                start.request.number,
+                result.run["status"].replace("_", "-"),
+                managed,
+                body=(f"Phase: {result.workflow.phase if result.workflow else 'unknown'}",),
+            )
+        except BaseException as error:
+            result = _finalization_failure(start.root, result, error, "git", "commit_outputs")
+            _print_incident(result, error_output)
+            return _interruption_code(error) or 9
+        try:
+            next_request = _next_request(start.root, start.request.number)
+        except BaseException as error:
+            result = _finalization_failure(start.root, result, error, "finalizing", "next_request")
+            _print_incident(result, error_output)
+            return _interruption_code(error) or 9
         _print_result(result, report, next_request, output, error_output)
-        return result.exit_code
+        code = result.exit_code
     finally:
-        start.lock.release()
+        try:
+            start.lock.release()
+        except BaseException as error:
+            if result is not None:
+                result = _finalization_failure(start.root, result, error, "lock", "release_lock")
+                _print_incident(result, error_output)
+            code = _interruption_code(error) or 9
+    return code
+
+
+def _finalization_failure(
+    root: Path,
+    result: RunExecutionResult,
+    error: BaseException,
+    component: str,
+    step: str,
+) -> RunExecutionResult:
+    run = record_incident(
+        result.run,
+        incident_id=f"inc-{uuid.uuid4().hex}",
+        component=component,
+        exception_class=type(error).__name__,
+        step=step,
+        retryable=False,
+    )
+    persist_run_progress(root, run)
+    return RunExecutionResult(
+        run, result.state, result.planned, result.workflow, result.changed_files,
+        "予期しない内部エラーが発生しました",
+        _interruption_code(error) or 9,
+    )
+
+
+def _print_incident(result: RunExecutionResult, output: TextIO) -> None:
+    incident = result.run["incidents"][-1]
+    print(f"Error: {result.reason}", file=output)
+    print(f"Incident: {incident['incident_id']}", file=output)
+    print(f"Component: {incident['component']}", file=output)
+
+
+def _interruption_code(error: BaseException) -> int | None:
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    if isinstance(error, TerminationSignal):
+        return 143
+    return None
 
 
 def _write_report(root: Path, result: RunExecutionResult) -> str:

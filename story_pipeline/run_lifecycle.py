@@ -135,6 +135,8 @@ def resume_run_record(
     updated["current_step"] = step
     updated["resume"] = {"step": step, "reason": reason}
     updated["resume_count"] += 1
+    updated["lifecycle"]["state"] = "executing"
+    updated["lifecycle"]["history"].append({"state": "executing", "occurred_at": timestamp})
     return updated
 
 
