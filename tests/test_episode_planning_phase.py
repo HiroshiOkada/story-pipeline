@@ -12,7 +12,9 @@ from story_pipeline.episode_planning import (
     build_episode_planning_context,
     check_episode_plan_candidate,
     episode_plan_generation_response_format,
+    episode_plan_evaluation_response_format,
     parse_episode_plan_candidate,
+    parse_episode_plan_evaluation,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -111,6 +113,32 @@ class EpisodePlanningPhaseTest(unittest.TestCase):
         codes = {issue.code for issue in check_episode_plan_candidate(candidate).issues}
         self.assertIn("HEADING_ORDER", codes)
         self.assertIn("INVALID_TARGET_LENGTH", codes)
+
+    def test_evaluation_requires_episode_plan_scores_and_error_blocks_adoption(self) -> None:
+        value = {
+            "decision": "accept", "summary": "採用可能", "issues": [],
+            "scores": {
+                "request_fit": 5, "chapter_fit": 5, "continuity": 5,
+                "causal_consistency": 4, "plan_completeness": 4, "length_fit": 5,
+            },
+        }
+        self.assertTrue(parse_episode_plan_evaluation(json.dumps(value)).adoptable)
+        value["issues"] = [{
+            "severity": "error", "category": "causality", "location": "## 終了状態",
+            "evidence": "場面から終了状態へ接続しない", "instruction": "原因となる行動を追加する",
+        }]
+        self.assertFalse(parse_episode_plan_evaluation(json.dumps(value)).adoptable)
+        del value["scores"]["length_fit"]
+        with self.assertRaises(StoryPipelineError):
+            parse_episode_plan_evaluation(json.dumps(value))
+
+    def test_evaluation_schema_requires_continuity_completeness_and_length(self) -> None:
+        schema = episode_plan_evaluation_response_format()["json_schema"]["schema"]
+        self.assertEqual(
+            set(schema["properties"]["scores"]["required"]),
+            {"request_fit", "chapter_fit", "continuity", "causal_consistency", "plan_completeness", "length_fit"},
+        )
+        self.assertFalse(schema["additionalProperties"])
 
 
 if __name__ == "__main__":

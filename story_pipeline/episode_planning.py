@@ -321,6 +321,77 @@ def check_episode_plan_candidate(
     return EpisodePlanMechanicalCheck(path, normalized, target_length, tuple(issues))
 
 
+def parse_episode_plan_evaluation(content: str) -> EpisodePlanEvaluation:
+    """共通評価契約と話計画に必要な score を検証する。"""
+    value = validate_evaluation(content)
+    required_scores = {
+        "request_fit",
+        "chapter_fit",
+        "continuity",
+        "causal_consistency",
+        "plan_completeness",
+        "length_fit",
+    }
+    missing = required_scores - value["scores"].keys()
+    if missing:
+        raise _episode_planning_format_error(
+            f"話計画評価に必須 score がありません: {sorted(missing)[0]}"
+        )
+    issues = tuple(
+        EpisodePlanEvaluationIssue(
+            item["severity"], item["category"], item["location"],
+            item["evidence"], item["instruction"],
+        )
+        for item in value["issues"]
+    )
+    return EpisodePlanEvaluation(
+        value["decision"], value["summary"], issues, tuple(sorted(value["scores"].items()))
+    )
+
+
+def episode_plan_evaluation_response_format() -> dict[str, Any]:
+    """reviewer へ渡す厳格な話計画評価 JSON Schema。"""
+    issue = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            "category": {"type": "string"},
+            "location": {"type": "string"},
+            "evidence": {"type": "string"},
+            "instruction": {"type": "string"},
+        },
+    }
+    required_scores = (
+        "request_fit", "chapter_fit", "continuity", "causal_consistency",
+        "plan_completeness", "length_fit",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decision", "summary", "issues", "scores"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["accept", "revise", "awaiting_human"]},
+            "summary": {"type": "string"},
+            "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 5},
+                "required": list(required_scores),
+                "properties": {
+                    name: {"type": "integer", "minimum": 1, "maximum": 5}
+                    for name in required_scores
+                },
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "episode_plan_evaluation", "strict": True, "schema": schema},
+    }
+
+
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:
     return "\n\n".join(document.delimited() for document in documents)
 
