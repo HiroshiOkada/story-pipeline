@@ -120,6 +120,24 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(state["active_request"], 0)
         self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
 
+    def test_i08_unexpected_workflow_error_becomes_generic_exit_9(self) -> None:
+        class BrokenClient(FakeClient):
+            def complete_role(self, *_: object, **__: object) -> CompletionResult:
+                raise RuntimeError("保存してはいけない内部情報")
+
+        fake = BrokenClient(self._config(), [])
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        run = json.loads((self.root / ".story-pipeline/runs/0000.json").read_text())
+        self.assertEqual(code, 9)
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["errors"][-1]["message"], "予期しない内部エラーが発生しました")
+        self.assertNotIn("RuntimeError", json.dumps(run, ensure_ascii=False))
+        self.assertNotIn("保存してはいけない", errors.getvalue())
+        self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
+
     def test_connection_failure_preserves_human_input_and_releases_lock(self) -> None:
         failure = ApiFailure("authentication", "認証失敗", 401)
         fake = FakeClient(self._config(), [], probe_error=failure)
