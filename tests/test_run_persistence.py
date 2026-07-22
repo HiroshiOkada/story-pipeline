@@ -30,7 +30,7 @@ from story_pipeline.run_report import (
     render_run_report,
     write_run_report,
 )
-from story_pipeline.runs import _validate_recorded_hashes, validate_run_data
+from story_pipeline.runs import _validate_current_recorded_hashes, validate_run_data
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
 from story_pipeline.validation import IssueCollector
@@ -213,10 +213,13 @@ class RunLifecycleTests(unittest.TestCase):
             target.write_text("更新後\n", encoding="utf-8")
             run = self.make_run()
             run["input_hashes"]["canon.md"] = "c" * 64
-            run["output_hashes"]["canon.md"] = sha256_file(target)
+            run["output_hashes"]["canon.md"] = "d" * 64
+            later = create_run_record(1, "e" * 64, COMMIT, now=NOW)
+            later["input_hashes"]["canon.md"] = "d" * 64
+            later["output_hashes"]["canon.md"] = sha256_file(target)
             collector = IssueCollector()
 
-            _validate_recorded_hashes(root, run, "run", collector)
+            _validate_current_recorded_hashes(root, {0: run, 1: later}, collector)
 
         canon_errors = [item for item in collector.issues if item.location == "canon.md"]
         self.assertEqual(canon_errors, [])

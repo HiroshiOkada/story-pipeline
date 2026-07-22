@@ -69,7 +69,7 @@ def validate_runs(
             collector.error("RUN_SCHEMA_INVALID", str(error), location)
             continue
         runs[number] = run
-        _validate_recorded_hashes(root, run, relative, collector)
+    _validate_current_recorded_hashes(root, runs, collector)
     _validate_state_references(state, runs, collector)
     return runs
 
@@ -354,15 +354,17 @@ def _validate_resume(value: Any, location: str) -> None:
     _string(resume["reason"], f"{location}#/resume/reason")
 
 
-def _validate_recorded_hashes(
-    root: Path, run: dict[str, Any], run_location: str, collector: IssueCollector
+def _validate_current_recorded_hashes(
+    root: Path, runs: dict[int, dict[str, Any]], collector: IssueCollector
 ) -> None:
-    request = f"requests/{run['request_number']:04d}.md"
-    _check_hash(root, request, run["request_sha256"], "REQUEST_HASH", collector)
-    for relative, expected in run["input_hashes"].items():
-        if relative not in run["output_hashes"]:
-            _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
-    for relative, expected in run["output_hashes"].items():
+    latest_outputs: dict[str, tuple[str, str]] = {}
+    for number, run in sorted(runs.items()):
+        request = f"requests/{number:04d}.md"
+        _check_hash(root, request, run["request_sha256"], "REQUEST_HASH", collector)
+        run_location = f".story-pipeline/runs/{number:04d}.json"
+        for relative, expected in run["output_hashes"].items():
+            latest_outputs[relative] = (expected, run_location)
+    for relative, (expected, run_location) in sorted(latest_outputs.items()):
         _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
 
 
