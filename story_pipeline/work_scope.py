@@ -57,8 +57,6 @@ def _standard_scope(
 
     chapter_number = state["current_chapter"] or state["next_chapter"]
     chapter_path = f"chapters/{chapter_number:04d}.md"
-    if not _safe_file(root, "plot.md") or not _safe_file(root, chapter_path):
-        return WorkScope("plotting", "create_plot", ("plot.md", chapter_path), 1, interpretation.requested_until)
 
     if state["pending_reviews"]:
         review = state["pending_reviews"][0]
@@ -82,6 +80,9 @@ def _standard_scope(
     if state["phase"] in {"final_revision", "completed"}:
         action = "report_completed" if state["phase"] == "completed" else "review_novel"
         return WorkScope(state["phase"], action, ("novel",), 1, interpretation.requested_until)
+
+    if not _safe_file(root, "plot.md") or not _safe_file(root, chapter_path):
+        return WorkScope("plotting", "create_plot", ("plot.md", chapter_path), 1, interpretation.requested_until)
 
     episode_number = state["next_episode"]
     plan = f"episode_plans/{episode_number:04d}.md"

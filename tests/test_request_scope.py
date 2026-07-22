@@ -211,7 +211,9 @@ class RequestScopeTest(unittest.TestCase):
             "chapters/0001.md",
         ):
             (self.root / relative).write_text(f"# {relative}\n")
-        self.state.update(phase="final_revision", current_chapter=1, next_episode=2)
+        self.state.update(
+            phase="final_revision", current_chapter=None, next_chapter=2, next_episode=2
+        )
 
         scope = determine_work_scope(self.root, self.state, interpretation)
 
