@@ -21,11 +21,11 @@ python -m pip install .
 story-pipeline --version
 ```
 
-開発時は [uv](https://docs.astral.sh/uv/) を使ってコマンドを実行できます。
+開発時は [uv](https://docs.astral.sh/uv/) を使ってコマンドを実行できます。リポジトリの外（クイックスタートで作成する空のディレクトリなど）から実行する場合は、`--project` にリポジトリのパスを指定します。
 
 ```console
-uv run story-pipeline --help
-uv run python -m unittest discover -s tests -p 'test_*.py'
+uv run --project /path/to/story-pipeline story-pipeline --help
+uv run --project /path/to/story-pipeline python -m unittest discover -s /path/to/story-pipeline/tests -p 'test_*.py'
 ```
 
 ## クイックスタート
@@ -34,7 +34,7 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 
    ```console
    mkdir my-story
-   story-pipeline init my-story
+   uv run --project /path/to/story-pipeline story-pipeline init my-story
    cd my-story
    ```
 
@@ -48,9 +48,9 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 4. `requests/0000.md` に作りたい作品と条件を書き、検査後に実行します。
 
    ```console
-   story-pipeline validate
-   story-pipeline status
-   story-pipeline run
+   uv run --project /path/to/story-pipeline story-pipeline validate
+   uv run --project /path/to/story-pipeline story-pipeline status
+   uv run --project /path/to/story-pipeline story-pipeline run
    ```
 
 5. 処理後の `requests/0000_agent.md` と作品ファイルを確認し、次に作成された `requests/0001.md` へ追加要求や判断を記入します。
