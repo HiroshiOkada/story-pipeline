@@ -142,17 +142,21 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(resumed["resume_count"], 1)
 
     def test_version_one_record_is_migrated_without_losing_initial_values(self) -> None:
-        run = self.make_run()
-        run["schema_version"] = 1
-        run.pop("request_revisions")
-        run.pop("resume_count")
+        for index, marker in enumerate(("b", "c", "d")):
+            with self.subTest(fixture=index):
+                request_hash = marker * 64
+                input_commit = marker * 40
+                run = create_run_record(index, request_hash, input_commit, now=NOW)
+                run["schema_version"] = 1
+                run.pop("request_revisions")
+                run.pop("resume_count")
 
-        migrated = validate_run_data(run, 0)
+                migrated = validate_run_data(run, index)
 
-        self.assertEqual(migrated["schema_version"], 2)
-        self.assertEqual(migrated["request_revisions"][0]["sha256"], "b" * 64)
-        self.assertEqual(migrated["request_revisions"][0]["input_commit"], COMMIT)
-        self.assertEqual(migrated["resume_count"], 0)
+                self.assertEqual(migrated["schema_version"], 2)
+                self.assertEqual(migrated["request_revisions"][0]["sha256"], request_hash)
+                self.assertEqual(migrated["request_revisions"][0]["input_commit"], input_commit)
+                self.assertEqual(migrated["resume_count"], 0)
 
     def test_cannot_finalize_with_running_step(self) -> None:
         run = start_step(self.make_run(), "generate", now=NOW)
