@@ -47,7 +47,7 @@ def _draft_payload() -> str:
     return json.dumps(
         {
             "path": "episodes/0001.md",
-            "content": "## 話タイトル\n潮風\n\n## 本文\n" + "海" * 100 + "\n",
+            "title": "潮風", "body": "海" * 100,
         },
         ensure_ascii=False,
     )
@@ -205,6 +205,7 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
                     "total_tokens": 30,
                     "prompt_tokens_details": {"cached_tokens": 4},
                     "completion_tokens_details": {"reasoning_tokens": 6},
+                    "cost": 0.00125,
                 },
             }
         ).encode()
@@ -225,6 +226,21 @@ class ProductionIncidentCharacterizationTest(unittest.TestCase):
         self.assertEqual(response.usage.total_tokens, 30)
         self.assertEqual(response.usage.cached_tokens, 4)
         self.assertEqual(response.usage.reasoning_tokens, 6)
+        self.assertEqual(response.usage.cost_usd, 0.00125)
+
+    def test_i09_zero_cost_is_distinct_from_missing_usage(self) -> None:
+        body = json.dumps({
+            "model": "mock",
+            "choices": [{"message": {"content": "本文"}, "finish_reason": "stop"}],
+            "usage": {"cost": 0},
+        }).encode()
+        response = ChatTransport(open_url=lambda *_args, **_kwargs: _Response(body)).complete(
+            base_url="https://example.invalid/v1", api_key="secret", model="mock",
+            messages=[], max_tokens=100, parameters={}, timeout=1,
+        )
+
+        self.assertEqual(response.usage.cost_usd, 0.0)
+        self.assertIsNone(response.usage.total_tokens)
 
 
 if __name__ == "__main__":

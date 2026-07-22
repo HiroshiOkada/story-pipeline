@@ -97,6 +97,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
 
         run, current = _begin(start, run, "adopt")
         if documents:
+            changed_document_paths = _changed_document_paths(start.root, documents)
             for path, content in documents:
                 atomic_write_text(start.root / path, content)
             output_hashes = {path: sha256_file(start.root / path) for path, _ in documents}
@@ -113,7 +114,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
                     checkpoint, checkpoint["adoption"]["output_hashes"]
                 )
                 write_draft_checkpoint(start.root, checkpoint)
-            changed = tuple(dict.fromkeys((*changed, *output_hashes)))
+            changed = tuple(dict.fromkeys((*changed, *changed_document_paths)))
             run = _finish(start, run, current, "completed", output_hashes=output_hashes, result="採用候補を保存")
         else:
             run = _finish(start, run, current, "skipped", result=workflow.reason or "採用変更なし")
@@ -189,6 +190,22 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         return RunExecutionResult(run, state, planned, workflow, (), message, code)
 
 
+def _changed_document_paths(
+    root: Path, documents: tuple[tuple[str, str], ...]
+) -> tuple[str, ...]:
+    """採用候補のうち、現在の作業ツリーと内容が異なるパスだけを返す。"""
+    changed: list[str] = []
+    for relative, content in documents:
+        try:
+            current = (root / relative).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            changed.append(relative)
+            continue
+        if current != content:
+            changed.append(relative)
+    return tuple(changed)
+
+
 def _begin(start: RunStart, run: dict[str, Any], identifier: str, hashes: dict[str, str] | None = None) -> tuple[dict[str, Any], str]:
     actual = _unique_step(run, identifier)
     updated = start_step(run, actual, input_hashes=hashes)
@@ -243,6 +260,7 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
                 "total_tokens": completion.response.usage.total_tokens,
                 "cached_tokens": completion.response.usage.cached_tokens,
                 "reasoning_tokens": completion.response.usage.reasoning_tokens,
+                "cost_usd": completion.response.usage.cost_usd,
             }
             if completion.response.usage is not None else None
         ),

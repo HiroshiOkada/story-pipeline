@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import math
 import re
 from typing import Any
 
@@ -68,7 +69,7 @@ def validate_runs(
             collector.error("RUN_SCHEMA_INVALID", str(error), location)
             continue
         runs[number] = run
-        _validate_recorded_hashes(root, run, relative, collector)
+    _validate_current_recorded_hashes(root, runs, collector)
     _validate_state_references(state, runs, collector)
     return runs
 
@@ -175,7 +176,8 @@ def _empty_metrics() -> dict[str, Any]:
         "retry_wait_ms": 0,
         "elapsed_ms": 0,
         "usage": {key: None for key in (
-            "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"
+            "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+            "cost_usd",
         )},
     }
 
@@ -238,7 +240,10 @@ def _validate_observability(run: dict[str, Any], location: str) -> None:
         if _bounded_integer(metrics[key], f"{location}#/metrics/{key}", 0, 2**63 - 1) != value:
             _fail("詳細記録と集計値が一致しません", f"{location}#/metrics/{key}")
     _validate_usage(metrics["usage"], f"{location}#/metrics/usage")
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"):
+    for key in (
+        "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+        "cost_usd",
+    ):
         values = [item["usage"][key] for item in calls if item["usage"] is not None and item["usage"][key] is not None]
         expected_usage = sum(values) if values else None
         if metrics["usage"][key] != expected_usage:
@@ -264,10 +269,20 @@ def _validate_usage(value: Any, location: str) -> None:
     if value is None:
         return
     usage = _object(value, location)
-    keys = {"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"}
+    keys = {
+        "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens",
+        "cost_usd",
+    }
     _keys(usage, keys, location)
     for key in keys:
-        if usage[key] is not None:
+        if usage[key] is not None and key == "cost_usd":
+            number = usage[key]
+            if (
+                not isinstance(number, (int, float)) or isinstance(number, bool)
+                or not math.isfinite(float(number)) or number < 0
+            ):
+                _fail("非負の有限数である必要があります", f"{location}/{key}")
+        elif usage[key] is not None:
             _bounded_integer(usage[key], f"{location}/{key}", 0, 2**63 - 1)
 
 
@@ -339,14 +354,18 @@ def _validate_resume(value: Any, location: str) -> None:
     _string(resume["reason"], f"{location}#/resume/reason")
 
 
-def _validate_recorded_hashes(
-    root: Path, run: dict[str, Any], run_location: str, collector: IssueCollector
+def _validate_current_recorded_hashes(
+    root: Path, runs: dict[int, dict[str, Any]], collector: IssueCollector
 ) -> None:
-    request = f"requests/{run['request_number']:04d}.md"
-    _check_hash(root, request, run["request_sha256"], "REQUEST_HASH", collector)
-    for section in ("input_hashes", "output_hashes"):
-        for relative, expected in run[section].items():
-            _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
+    latest_outputs: dict[str, tuple[str, str]] = {}
+    for number, run in sorted(runs.items()):
+        request = f"requests/{number:04d}.md"
+        _check_hash(root, request, run["request_sha256"], "REQUEST_HASH", collector)
+        run_location = f".story-pipeline/runs/{number:04d}.json"
+        for relative, expected in run["output_hashes"].items():
+            latest_outputs[relative] = (expected, run_location)
+    for relative, (expected, run_location) in sorted(latest_outputs.items()):
+        _check_hash(root, relative, expected, "RECORDED_HASH", collector, run_location)
 
 
 def _check_hash(

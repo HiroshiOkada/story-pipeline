@@ -18,6 +18,7 @@ from story_pipeline.chapter_revision import (
     build_chapter_revision_context,
     build_chapter_revision_messages,
     build_chapter_summary_messages,
+    chapter_summary_evidence_options,
     chapter_evaluation_response_format,
     chapter_revision_response_format,
     chapter_summary_response_format,
@@ -196,9 +197,14 @@ def _summary(
     counts: dict[str, int],
 ) -> ChapterCompletionUpdate | None:
     messages = list(build_chapter_summary_messages(context, best))
+    evidence_options = chapter_summary_evidence_options(best)
+    if not evidence_options:
+        return None
     for _ in range(maximum_calls):
         counts["summary"] += 1
-        completion = _complete(client, "reviewer", messages, chapter_summary_response_format())
+        completion = _complete(
+            client, "reviewer", messages, chapter_summary_response_format(evidence_options)
+        )
         if completion is None:
             messages.append({"role": "user", "content": "章あらすじ JSON object 全体を再生成してください。"})
             continue

@@ -336,6 +336,31 @@ def record_incident(
     return updated
 
 
+def record_operational_error(
+    run: dict[str, Any],
+    *,
+    step: str,
+    category: str,
+    message: str,
+    retryable: bool,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """終了状態の run にも、内部生成された安全な運用エラーを追記する。"""
+    if not step or not category or not message:
+        raise ValueError("運用エラーの必須値が不足しています")
+    updated = deepcopy(run)
+    timestamp = now or utc_timestamp()
+    updated["errors"].append({
+        "step": step,
+        "category": category,
+        "message": message,
+        "retryable": retryable,
+        "occurred_at": timestamp,
+    })
+    updated["updated_at"] = timestamp
+    return updated
+
+
 def finalize_run_record(
     run: dict[str, Any],
     status: RunStatus,
@@ -388,6 +413,7 @@ def _empty_metrics() -> dict[str, Any]:
             "total_tokens": None,
             "cached_tokens": None,
             "reasoning_tokens": None,
+            "cost_usd": None,
         },
     }
 

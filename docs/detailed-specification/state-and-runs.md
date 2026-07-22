@@ -136,7 +136,8 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
       "completion_tokens": null,
       "total_tokens": null,
       "cached_tokens": null,
-      "reasoning_tokens": null
+      "reasoning_tokens": null,
+      "cost_usd": null
     }
   }
 }
@@ -185,7 +186,7 @@ knowledge=completed, adoption=adopted
 
 `model_attempts` は後方互換用の論理呼び出し集計とする。version 3 の `model_calls` は各論理呼び出しに role、purpose、モデル、要求 revision、resume count、開始・終了日時、所要時間、fallback、truncation、usage を関連付ける。`transport_attempts` は各 HTTP 試行の試行番号と上限、所要時間、失敗分類、実待機時間を保存する。`metrics` は詳細値から再計算し、読み込み時に一致を検証する。
 
-provider が usage を返した場合だけ prompt、completion、total、cached、reasoning token を保存する。提供されない値は `null` のままとし、0 と区別する。プロンプト、応答全文、API キー、認証ヘッダー、完全 URL は記録しない。
+provider が usage を返した場合だけ prompt、completion、total、cached、reasoning token と実課金 `cost_usd` を保存する。提供されない値は `null` のままとし、0 と区別する。価格表から cost を推測しない。プロンプト、応答全文、API キー、認証ヘッダー、完全 URL は記録しない。
 
 `lifecycle` は `starting`、`executing`、`finalizing`、`committed` の履歴を持つ。予期しない例外は例外本文や traceback を保存せず、`incidents` に UUID 形式の ID、component、例外クラス、現在工程、lifecycle、再試行可否だけを保存する。workflow、transport、finalizing、Git、lock、SIGINT/SIGTERM は別 component または例外クラスで識別する。
 

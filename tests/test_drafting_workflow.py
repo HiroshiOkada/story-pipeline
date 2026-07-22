@@ -18,7 +18,7 @@ from story_pipeline.state import load_state
 def draft_payload(label: str) -> str:
     return json.dumps({
         "path": "episodes/0001.md",
-        "content": f"## 話タイトル\n潮風\n\n## 本文\n{label}" + "海" * 92 + "。\n",
+        "title": "潮風", "body": label + "海" * 92 + "。",
     }, ensure_ascii=False)
 
 
@@ -48,9 +48,13 @@ class FakeClient:
     def __init__(self, responses: list[str]) -> None:
         self.responses = iter(responses)
         self.roles: list[str] = []
+        self.messages: list[list[dict[str, str]]] = []
+        self.options: list[dict[str, object]] = []
 
-    def complete_role(self, role: str, messages: list[dict[str, str]], **_: object) -> CompletionResult:
+    def complete_role(self, role: str, messages: list[dict[str, str]], **options: object) -> CompletionResult:
         self.roles.append(role)
+        self.messages.append(messages)
+        self.options.append(options)
         return CompletionResult(
             ChatResponse(next(self.responses), "mock", "stop"), f"mock-{role}", 1, ()
         )
@@ -97,8 +101,17 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertFalse((self.root / "episodes" / "0001.md").exists())
         self.assertEqual(result.checkpoint_path, ".story-pipeline/checkpoints/0000/draft.json")
         self.assertTrue((self.root / result.checkpoint_path).is_file())
-        self.assertIn("MISSING_HEADING", {item.code for item in result.diagnostics})
+        self.assertIn("DRAFT_JSON_INVALID", {item.code for item in result.diagnostics})
         self.assertNotIn("不完全", " ".join(item.reason for item in result.diagnostics))
+        decisions = [item for item in result.diagnostics if item.code.startswith("DECISION_")]
+        self.assertEqual([item.code for item in decisions], ["DECISION_REVISE", "DECISION_ACCEPT"])
+        self.assertIn("errors=0,warnings=0,notes=0", decisions[-1].reason)
+        self.assertIn("consistency=5", decisions[-1].reason)
+        self.assertNotIn("採用可能", decisions[-1].reason)
+        retry = client.messages[1][-1]["content"]
+        self.assertIn("path、title、body", retry)
+        schema = client.options[0]["response_format"]["json_schema"]["schema"]
+        self.assertEqual(set(schema["required"]), {"path", "title", "body"})
 
     def test_mock_workflow_returns_awaiting_human_without_knowledge_call(self) -> None:
         client = FakeClient([draft_payload("判断候補"), evaluation("awaiting_human", 3)])
@@ -126,6 +139,20 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertEqual(second.roles, ["reviewer"])
         self.assertEqual([item.purpose for item in resumed.calls], ["knowledge"])
         self.assertIn("CHECKPOINT_REUSED", {item.code for item in resumed.diagnostics})
+
+    def test_knowledge_retry_requires_unique_quote_or_omission(self) -> None:
+        repeated = "同じ言葉。同じ言葉。"
+        client = FakeClient([
+            draft_payload(repeated), evaluation("accept", 5),
+            knowledge("同じ言葉。"), knowledge("同じ言葉。"),
+        ])
+
+        result = produce_draft(self.root, self.request, self.interpretation, 1, client)
+
+        self.assertEqual(result.status, "failed")
+        retry = client.messages[-1][-1]["content"]
+        self.assertIn("前後を改変せず引用に含めて一意", retry)
+        self.assertIn("配列から省いて", retry)
 
     def test_changed_checkpoint_input_regenerates_draft(self) -> None:
         accepted_label = "二人は看板を直し始めた。"

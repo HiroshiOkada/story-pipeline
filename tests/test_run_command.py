@@ -15,8 +15,10 @@ from story_pipeline.cli import main
 from story_pipeline.config import load_config
 from story_pipeline.llm_client import CompletionResult
 from story_pipeline.llm_transport import ApiFailure, ChatResponse
+from story_pipeline.errors import StoryPipelineError
 from story_pipeline.interruptions import TerminationSignal
 from story_pipeline.run_command import run_command
+from story_pipeline.run_execution import _changed_document_paths
 from story_pipeline.run_start import prepare_run
 from story_pipeline.scaffold import create_scaffold
 
@@ -52,7 +54,7 @@ def evaluation(decision: str) -> str:
 def draft() -> str:
     return json.dumps({
         "path": "episodes/0001.md",
-        "content": "## 話タイトル\n潮風\n\n## 本文\n二人は古い看板を直し始めた。" + "海" * 72 + "。\n",
+        "title": "潮風", "body": "二人は古い看板を直し始めた。" + "海" * 72 + "。",
     }, ensure_ascii=False)
 
 
@@ -95,6 +97,18 @@ class FakeClient:
 
 
 class InitializedRunCommandIntegrationTest(unittest.TestCase):
+    def test_changed_document_paths_excludes_unchanged_adoption_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "existing.md").write_text("同じ内容\n", encoding="utf-8")
+
+            paths = _changed_document_paths(root, (
+                ("existing.md", "同じ内容\n"),
+                ("new.md", "新しい内容\n"),
+            ))
+
+        self.assertEqual(paths, ("new.md",))
+
     def test_init_request_edit_and_fake_run_adopt_concept(self) -> None:
         identity = {
             "GIT_AUTHOR_NAME": "Test",
@@ -334,6 +348,20 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(code, 9)
         self.assertEqual(run["incidents"][-1]["component"], "git")
         self.assertFalse(run["incidents"][-1]["retryable"])
+
+    def test_safe_git_error_reason_is_persisted_without_traceback(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
+        failure = StoryPipelineError("指定ファイルを stage できません", "safe", "check", 5)
+        with (
+            patch("story_pipeline.run_start.LLMClient", return_value=fake),
+            patch("story_pipeline.run_command.commit_run_outputs", side_effect=failure),
+        ):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+
+        run = self._run_record()
+        self.assertEqual(code, 9)
+        self.assertEqual(run["errors"][-1]["category"], "git")
+        self.assertEqual(run["errors"][-1]["message"], failure.reason)
 
     def test_sigint_is_recorded_as_interruption(self) -> None:
         self._assert_interruption(KeyboardInterrupt(), 130)

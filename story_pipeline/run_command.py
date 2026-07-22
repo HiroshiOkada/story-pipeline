@@ -13,7 +13,12 @@ from story_pipeline.request_selection import has_meaningful_request_content
 from story_pipeline.run_execution import RunExecutionResult, execute_started_run
 from story_pipeline.run_report import FileChange, ReportContext, write_run_report
 from story_pipeline.execution_store import persist_run_progress
-from story_pipeline.run_lifecycle import record_incident, transition_lifecycle
+from story_pipeline.run_lifecycle import (
+    record_incident,
+    record_operational_error,
+    transition_lifecycle,
+)
+from story_pipeline.errors import StoryPipelineError
 from story_pipeline.run_start import prepare_run
 from story_pipeline.interruptions import TerminationSignal, capture_sigterm
 
@@ -109,10 +114,20 @@ def _finalization_failure(
         step=step,
         retryable=False,
     )
+    safe_reason = "予期しない内部エラーが発生しました"
+    if isinstance(error, StoryPipelineError):
+        safe_reason = error.reason
+        run = record_operational_error(
+            run,
+            step=step,
+            category=component,
+            message=safe_reason,
+            retryable=False,
+        )
     persist_run_progress(root, run)
     return RunExecutionResult(
         run, result.state, result.planned, result.workflow, result.changed_files,
-        "予期しない内部エラーが発生しました",
+        safe_reason,
         _interruption_code(error) or 9,
     )
 

@@ -460,12 +460,15 @@ def build_chapter_summary_messages(
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     )
     digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+    evidence_options = chapter_summary_evidence_options(accepted)
+    options = json.dumps(evidence_options, ensure_ascii=False, separators=(",", ":"))
     return (
         {
             "role": "system",
             "content": (
                 "あなたは Story Pipeline の章あらすじ抽出器です。採用本文で読者へ提示された事実だけを"
-                "時系列順に要約し、各要点の一意な根拠引用を返します。応答は指定 JSON object だけにします。"
+                "時系列順に要約し、各要点の根拠を提示された引用候補から選びます。"
+                "応答は指定 JSON object だけにします。"
             ),
         },
         {
@@ -475,17 +478,39 @@ def build_chapter_summary_messages(
                 f"{data}\n--- END ACCEPTED CHAPTER sha256={digest} ---"
             ),
         },
+        {"role": "user", "content": f"evidence は次の候補から選択してください: {options}"},
         {"role": "user", "content": "summary と evidence の全キーを返してください。"},
     )
 
 
-def chapter_summary_response_format() -> dict[str, Any]:
+def chapter_summary_evidence_options(
+    accepted: EvaluatedChapterRevision,
+) -> tuple[str, ...]:
+    """採用本文から一意な非見出し行を根拠候補として抽出する。"""
+    combined = "\n".join(document for _, document in accepted.documents)
+    candidates: list[str] = []
+    for _, document in accepted.documents:
+        for line in document.splitlines():
+            candidate = line.strip()
+            if not candidate or candidate.startswith("#"):
+                continue
+            if combined.count(candidate) == 1:
+                candidates.append(candidate)
+    return tuple(dict.fromkeys(candidates))
+
+
+def chapter_summary_response_format(
+    evidence_options: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    evidence_item: dict[str, Any] = {"type": "string", "minLength": 1}
+    if evidence_options:
+        evidence_item["enum"] = list(evidence_options)
     schema = {
         "type": "object", "additionalProperties": False,
         "required": ["summary", "evidence"],
         "properties": {
             "summary": {"type": "string", "minLength": 1},
-            "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "evidence": {"type": "array", "minItems": 1, "items": evidence_item},
         },
     }
     return {"type": "json_schema", "json_schema": {"name": "chapter_summary", "strict": True, "schema": schema}}
@@ -513,9 +538,10 @@ def build_chapter_completion_update(
     for index, quote in enumerate(value["evidence"]):
         if not isinstance(quote, str) or not quote.strip():
             raise _format_error(f"evidence/{index} は空でない文字列である必要があります")
-        if combined.count(quote) != 1:
+        resolved = _resolve_summary_evidence(quote, combined)
+        if resolved is None:
             raise _format_error(f"evidence/{index} が採用本文に一意に存在しません")
-        evidence.append(quote)
+        evidence.append(resolved)
     if not evidence:
         raise _format_error("章あらすじには1件以上の evidence が必要です")
     updated_chapter = _replace_summary_section(chapter_content, value["summary"])
@@ -527,6 +553,29 @@ def build_chapter_completion_update(
         context.chapter_path, updated_chapter, value["summary"].strip(), tuple(evidence),
         completed, next_chapter, "final_revision" if all_chapters_complete else "episode_planning",
     )
+
+
+def _resolve_summary_evidence(evidence: str, content: str) -> str | None:
+    """改行などの空白差を許容しつつ、一意な原文引用へ戻す。"""
+    normalized_evidence = "".join(character for character in evidence if not character.isspace())
+    if not normalized_evidence:
+        return None
+    characters: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(content):
+        if not character.isspace():
+            characters.append(character)
+            positions.append(index)
+    normalized_content = "".join(characters)
+    starts: list[int] = []
+    offset = 0
+    while (found := normalized_content.find(normalized_evidence, offset)) >= 0:
+        starts.append(found)
+        offset = found + 1
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    return content[positions[start]:positions[start + len(normalized_evidence) - 1] + 1]
 
 
 def _replace_summary_section(content: str, summary: str) -> str:

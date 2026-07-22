@@ -30,9 +30,10 @@ from story_pipeline.run_report import (
     render_run_report,
     write_run_report,
 )
-from story_pipeline.runs import validate_run_data
+from story_pipeline.runs import _validate_current_recorded_hashes, validate_run_data
 from story_pipeline.scaffold import create_scaffold
 from story_pipeline.state import load_state
+from story_pipeline.validation import IssueCollector
 
 
 NOW = "2026-07-22T01:23:45Z"
@@ -115,13 +116,14 @@ class RunLifecycleTests(unittest.TestCase):
             ),
             usage={
                 "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
-                "cached_tokens": None, "reasoning_tokens": 5,
+                "cached_tokens": None, "reasoning_tokens": 5, "cost_usd": 0.0025,
             },
         )
 
         self.assertEqual(run["metrics"]["transport_attempts"], 2)
         self.assertEqual(run["metrics"]["retry_wait_ms"], 500)
         self.assertEqual(run["metrics"]["usage"]["total_tokens"], 30)
+        self.assertEqual(run["metrics"]["usage"]["cost_usd"], 0.0025)
         self.assertEqual(validate_run_data(run, 0), run)
         run["metrics"]["usage"]["total_tokens"] = 31
         with self.assertRaises(ValueError):
@@ -203,6 +205,24 @@ class RunLifecycleTests(unittest.TestCase):
         run = start_step(self.make_run(), "generate", now=NOW)
         with self.assertRaises(ValueError):
             finalize_run_record(run, "completed", now=LATER)
+
+    def test_current_output_hash_supersedes_historical_input_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "canon.md"
+            target.write_text("更新後\n", encoding="utf-8")
+            run = self.make_run()
+            run["input_hashes"]["canon.md"] = "c" * 64
+            run["output_hashes"]["canon.md"] = "d" * 64
+            later = create_run_record(1, "e" * 64, COMMIT, now=NOW)
+            later["input_hashes"]["canon.md"] = "d" * 64
+            later["output_hashes"]["canon.md"] = sha256_file(target)
+            collector = IssueCollector()
+
+            _validate_current_recorded_hashes(root, {0: run, 1: later}, collector)
+
+        canon_errors = [item for item in collector.issues if item.location == "canon.md"]
+        self.assertEqual(canon_errors, [])
 
 
 class ExecutionPersistenceIntegrationTests(unittest.TestCase):
@@ -312,6 +332,7 @@ class ReportingAndNextRequestTests(unittest.TestCase):
         )
 
         self.assertIn("total_tokens=unknown", report)
+        self.assertIn("cost_usd=unknown", report)
         self.assertIn("再開後 knowledge 再生成: 0", report)
         self.assertIn("retry_wait_ms=0", report)
 

@@ -245,7 +245,10 @@ def _generate_valid_candidate(
             ))
             messages.append({
                 "role": "user",
-                "content": "前回は有効な応答本文がありませんでした。対象話本文の JSON object 全体を再生成してください。",
+                "content": (
+                    "前回は有効な応答本文がありませんでした。対象話本文の JSON object 全体を再生成してください。"
+                    + _exact_draft_content_instruction()
+                ),
             })
             continue
         calls.append(DraftingCall(role, purpose, completion))
@@ -268,6 +271,7 @@ def _generate_valid_candidate(
                 "content": (
                     "前回候補は出力契約に違反しました。応答を推測修復せず、"
                     f"次を直した対象話本文の JSON object 全体を再生成してください: {error.reason}"
+                    + _exact_draft_content_instruction()
                 ),
             })
             continue
@@ -290,9 +294,17 @@ def _generate_valid_candidate(
             "content": (
                 "前回候補は機械検査に失敗しました。前回内容へ継ぎ足さず、"
                 f"次を直した対象話本文の JSON object 全体を再生成してください: {issue_text}"
+                + _exact_draft_content_instruction()
             ),
         })
     return None
+
+
+def _exact_draft_content_instruction() -> str:
+    return (
+        " title は見出しや改行のない話タイトルだけ、body は見出しのない"
+        "小説本文だけとして、path、title、body の JSON object 全体を返してください。"
+    )
 
 
 def _review_candidate(
@@ -325,7 +337,23 @@ def _review_candidate(
             continue
         calls.append(DraftingCall("reviewer", "review", completion))
         try:
-            return parse_draft_evaluation(completion.response.content)
+            evaluation = parse_draft_evaluation(completion.response.content)
+            severities = {
+                name: sum(item.severity == name for item in evaluation.issues)
+                for name in ("error", "warning", "note")
+            }
+            scores = ",".join(f"{name}={value}" for name, value in evaluation.scores)
+            diagnostics.append(DraftingDiagnostic(
+                "evaluation",
+                f"DECISION_{evaluation.decision.upper()}",
+                attempt,
+                _candidate_hash(candidate),
+                (
+                    f"errors={severities['error']},warnings={severities['warning']},"
+                    f"notes={severities['note']};scores={scores}"
+                ),
+            ))
+            return evaluation
         except StoryPipelineError as error:
             if error.exit_code != 7:
                 raise
@@ -429,6 +457,8 @@ def _extract_knowledge(
                 "content": (
                     "前回更新候補は出力契約または evidence 検証に失敗しました。"
                     f"次を直した JSON object 全体を再生成してください: {error.reason}"
+                    " evidence が複数回現れる場合は本文の前後を改変せず引用に含めて一意にし、"
+                    "一意な完全一致引用を作れない項目は配列から省いてください。"
                 ),
             })
     return None

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import math
 import socket
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -36,6 +37,7 @@ class TokenUsage:
     total_tokens: int | None
     cached_tokens: int | None
     reasoning_tokens: int | None
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,11 +176,19 @@ def _normalize_usage(value: Any) -> TokenUsage | None:
         _usage_integer(value.get("total_tokens")),
         _usage_integer(cached),
         _usage_integer(reasoning),
+        _usage_number(value.get("cost")),
     )
 
 
 def _usage_integer(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _usage_number(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) and normalized >= 0 else None
 
 
 def _error_message(body: bytes, sanitizer: SecretSanitizer) -> str:

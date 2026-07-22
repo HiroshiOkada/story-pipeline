@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -109,6 +110,10 @@ class DraftCheckpointTest(unittest.TestCase):
             0, 1, self.context, self.best, evaluation_model_reference="reviewer",
             now="2026-07-22T01:23:45Z",
         )
+        for relative in ("canon.md", "characters.md"):
+            checkpoint["input_hashes"][relative] = hashlib.sha256(
+                (self.root / relative).read_bytes()
+            ).hexdigest()
         update = DraftKnowledgeUpdate(
             (CanonFact("海辺を歩いた", "海辺を歩いた。", "episodes/0001.md", "第1話", ("凪",)),),
             (CharacterStateUpdate("凪", "海辺にいる", "海辺を歩いた。", "episodes/0001.md", "第1話"),),
@@ -136,3 +141,10 @@ class DraftCheckpointTest(unittest.TestCase):
         self.assertEqual(adopted["adoption"]["status"], "adopted")
         self.assertIn("episodes/0001.md の確定事項", (self.root / "canon.md").read_text())
         self.assertIn("凪: 海辺にいる", (self.root / "characters.md").read_text())
+
+        write_draft_checkpoint(self.root, adopted)
+        collector = IssueCollector()
+        validate_draft_checkpoints(self.root, {0: {}}, collector)
+        stale_paths = {item.location for item in collector.issues if item.code == "CHECKPOINT_STALE_INPUT"}
+        self.assertNotIn("canon.md", stale_paths)
+        self.assertNotIn("characters.md", stale_paths)
