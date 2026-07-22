@@ -108,4 +108,3 @@ def may_start_next_story(
 ) -> bool:
     """cost 欠落または合計停止閾値到達後の開始を禁止する。"""
     return cumulative_cost is not None and cumulative_cost < limits.total_stop_threshold_usd
-
