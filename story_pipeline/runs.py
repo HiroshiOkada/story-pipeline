@@ -73,7 +73,13 @@ def validate_runs(
 
 def _load_run(path: Path, filename_number: int) -> dict[str, Any]:
     run = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
-    location = path.as_posix()
+    return validate_run_data(run, filename_number, path.as_posix())
+
+
+def validate_run_data(
+    run: Any, filename_number: int, location: str = ".story-pipeline/runs"
+) -> dict[str, Any]:
+    """メモリ上の run 値をファイル読み込み時と同じ契約で検証する。"""
     run = _object(run, location)
     _keys(run, RUN_KEYS, location)
     if _integer(run["schema_version"], f"{location}#/schema_version") != 1:

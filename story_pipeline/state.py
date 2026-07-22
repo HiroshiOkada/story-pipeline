@@ -35,6 +35,11 @@ def load_state(root: Path) -> dict[str, Any]:
         _invalid("状態ファイルを読み取れません。", str(path), error)
     except (json.JSONDecodeError, ValueError) as error:
         _invalid(f"状態 JSON が不正です: {error}", ".story-pipeline/state.json", error)
+    return validate_state_data(state)
+
+
+def validate_state_data(state: Any) -> dict[str, Any]:
+    """メモリ上の state 値を読み込み時と同じ契約で検証する。"""
     if not isinstance(state, dict):
         _invalid("object である必要があります。", "/")
     _exact_keys(state, STATE_KEYS, "/")
