@@ -118,6 +118,17 @@ class EvaluatedChapterRevision:
         return 0 if self.candidate is None else self.candidate.revision_count
 
 
+@dataclass(frozen=True, slots=True)
+class ChapterCompletionUpdate:
+    chapter_path: str
+    chapter_content: str
+    summary: str
+    evidence: tuple[str, ...]
+    completed_chapters: tuple[int, ...]
+    next_chapter: int
+    next_phase: str
+
+
 CHAPTER_SCORE_NAMES = (
     "request_fit", "pacing", "repetition", "cast_balance", "timeline",
     "viewpoint", "foreshadowing", "character_arc",
@@ -437,6 +448,96 @@ def select_best_chapter_revision(
         sum(score for _, score in item.evaluation.scores),
         -item.revision_count,
     ))
+
+
+def build_chapter_summary_messages(
+    context: ChapterRevisionContext,
+    accepted: EvaluatedChapterRevision,
+) -> tuple[dict[str, str], ...]:
+    """採用済み章本文から根拠付きあらすじだけを抽出するメッセージを作る。"""
+    data = json.dumps(
+        [{"path": path, "content": content} for path, content in accepted.documents],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+    return (
+        {
+            "role": "system",
+            "content": (
+                "あなたは Story Pipeline の章あらすじ抽出器です。採用本文で読者へ提示された事実だけを"
+                "時系列順に要約し、各要点の一意な根拠引用を返します。応答は指定 JSON object だけにします。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"採用済み章本文:\n--- BEGIN ACCEPTED CHAPTER sha256={digest} ---\n"
+                f"{data}\n--- END ACCEPTED CHAPTER sha256={digest} ---"
+            ),
+        },
+        {"role": "user", "content": "summary と evidence の全キーを返してください。"},
+    )
+
+
+def chapter_summary_response_format() -> dict[str, Any]:
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["summary", "evidence"],
+        "properties": {
+            "summary": {"type": "string", "minLength": 1},
+            "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        },
+    }
+    return {"type": "json_schema", "json_schema": {"name": "chapter_summary", "strict": True, "schema": schema}}
+
+
+def build_chapter_completion_update(
+    content: str,
+    *,
+    context: ChapterRevisionContext,
+    accepted: EvaluatedChapterRevision,
+    chapter_content: str,
+    completed_chapters: tuple[int, ...] = (),
+    all_chapters_complete: bool = False,
+) -> ChapterCompletionUpdate:
+    """根拠を検証し、章あらすじと状態更新候補を決定的に構成する。"""
+    if not accepted.evaluation.adoptable:
+        raise ValueError("完成判定済みの採用候補が必要です")
+    value = parse_json_object(content, {
+        "summary": FieldRule((str,)), "evidence": FieldRule((list,)),
+    })
+    if not value["summary"].strip():
+        raise _format_error("章あらすじが空です")
+    combined = "\n".join(document for _, document in accepted.documents)
+    evidence: list[str] = []
+    for index, quote in enumerate(value["evidence"]):
+        if not isinstance(quote, str) or not quote.strip():
+            raise _format_error(f"evidence/{index} は空でない文字列である必要があります")
+        if combined.count(quote) != 1:
+            raise _format_error(f"evidence/{index} が採用本文に一意に存在しません")
+        evidence.append(quote)
+    if not evidence:
+        raise _format_error("章あらすじには1件以上の evidence が必要です")
+    updated_chapter = _replace_summary_section(chapter_content, value["summary"])
+    completed = tuple(sorted(set((*completed_chapters, context.chapter_number))))
+    next_chapter = context.chapter_number + 1
+    if next_chapter > 9999:
+        next_chapter = 9999
+    return ChapterCompletionUpdate(
+        context.chapter_path, updated_chapter, value["summary"].strip(), tuple(evidence),
+        completed, next_chapter, "final_revision" if all_chapters_complete else "episode_planning",
+    )
+
+
+def _replace_summary_section(content: str, summary: str) -> str:
+    normalized = validate_markdown(content)
+    pattern = re.compile(
+        rf"(?ms)^{re.escape(CHAPTER_SUMMARY_HEADING)}\s*$\n.*?(?=^## |\Z)"
+    )
+    replacement = f"{CHAPTER_SUMMARY_HEADING}\n{summary.strip()}\n"
+    if pattern.search(normalized) is None:
+        return normalized.rstrip() + "\n\n" + replacement
+    return pattern.sub(replacement, normalized, count=1).rstrip() + "\n"
 
 
 def _parse_human_decision(value: Any) -> ChapterDecision | None:

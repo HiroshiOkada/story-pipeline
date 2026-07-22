@@ -15,6 +15,9 @@ from story_pipeline.chapter_revision import (
     check_chapter_revision_candidate,
     EvaluatedChapterRevision,
     build_chapter_revision_messages,
+    build_chapter_completion_update,
+    build_chapter_summary_messages,
+    chapter_summary_response_format,
     parse_chapter_evaluation,
     parse_chapter_revision_candidate,
     run_chapter_revision_loop,
@@ -177,6 +180,50 @@ class ChapterRevisionContextTest(unittest.TestCase):
         original = EvaluatedChapterRevision(None, (), evaluation)
         revised = EvaluatedChapterRevision(candidate, (), evaluation)
         self.assertIs(select_best_chapter_revision((revised, original)), original)
+
+    def test_completion_update_verifies_evidence_and_updates_summary_and_state(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        scores = {name: 5 for name in CHAPTER_SCORE_NAMES}
+        evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        documents = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        accepted = EvaluatedChapterRevision(None, documents, evaluation)
+        messages = build_chapter_summary_messages(context, accepted)
+        self.assertIn("BEGIN ACCEPTED CHAPTER", messages[-2]["content"])
+        payload = json.dumps({"summary": "二つの出来事を経て関係が進展した。", "evidence": ["本文1", "本文2"]}, ensure_ascii=False)
+        update = build_chapter_completion_update(
+            payload, context=context, accepted=accepted,
+            chapter_content=(self.root / context.chapter_path).read_text(encoding="utf-8"),
+            completed_chapters=(), all_chapters_complete=False,
+        )
+        self.assertIn("二つの出来事", update.chapter_content)
+        self.assertNotIn("未作成", update.chapter_content)
+        self.assertEqual(update.completed_chapters, (1,))
+        self.assertEqual(update.next_chapter, 2)
+        self.assertEqual(update.next_phase, "episode_planning")
+
+    def test_completion_update_rejects_unsupported_evidence(self) -> None:
+        context = build_chapter_revision_context(self.root, self.request, self.interpretation, 1)
+        scores = {name: 5 for name in CHAPTER_SCORE_NAMES}
+        evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        documents = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
+        accepted = EvaluatedChapterRevision(None, documents, evaluation)
+        with self.assertRaises(StoryPipelineError):
+            build_chapter_completion_update(
+                json.dumps({"summary": "要約", "evidence": ["本文にない事実"]}, ensure_ascii=False),
+                context=context, accepted=accepted,
+                chapter_content=(self.root / context.chapter_path).read_text(encoding="utf-8"),
+            )
+
+    def test_summary_schema_is_strict(self) -> None:
+        schema = chapter_summary_response_format()["json_schema"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["properties"]["evidence"]["minItems"], 1)
 
 
 if __name__ == "__main__":
