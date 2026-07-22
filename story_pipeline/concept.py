@@ -6,8 +6,11 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
+from story_pipeline.errors import StoryPipelineError
+from story_pipeline.llm_output import validate_markdown
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -42,6 +45,27 @@ class ConceptContext:
 
     messages: tuple[dict[str, str], ...]
     input_hashes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MechanicalIssue:
+    """LLM を使わず検出した構想候補の問題。"""
+
+    code: str
+    location: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConceptMechanicalCheck:
+    """安全な正規化後の本文と、採用を妨げる機械検査問題。"""
+
+    content: str
+    issues: tuple[MechanicalIssue, ...]
+
+    @property
+    def accepted(self) -> bool:
+        return not self.issues
 
 
 def build_concept_context(
@@ -98,6 +122,52 @@ def build_concept_context(
         *((document.path, document.sha256) for document in documents),
     )
     return ConceptContext(messages, hashes)
+
+
+def check_concept_markdown(content: str) -> ConceptMechanicalCheck:
+    """内容を創作せず、安全な正規化と構想固有の機械検査を行う。"""
+    try:
+        normalized = validate_markdown(content)
+    except StoryPipelineError as error:
+        return ConceptMechanicalCheck(
+            content if isinstance(content, str) else "",
+            (MechanicalIssue("INVALID_MARKDOWN", "concept.md", error.reason),),
+        )
+    issues: list[MechanicalIssue] = []
+    if re.search(r"<!--[\s\S]*?-->", normalized):
+        issues.append(
+            MechanicalIssue(
+                "TEMPLATE_COMMENT",
+                "concept.md",
+                "HTML コメントまたはテンプレートコメントが残っています",
+            )
+        )
+    lines = normalized.splitlines()
+    positions: dict[str, list[int]] = {heading: [] for heading in CONCEPT_HEADINGS}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in positions:
+            positions[stripped].append(index)
+    for heading in CONCEPT_HEADINGS:
+        found = positions[heading]
+        if not found:
+            issues.append(MechanicalIssue("MISSING_HEADING", heading, "必須見出しがありません"))
+        elif len(found) > 1:
+            issues.append(MechanicalIssue("DUPLICATE_HEADING", heading, "必須見出しが重複しています"))
+    if all(len(positions[heading]) == 1 for heading in CONCEPT_HEADINGS):
+        ordered = [positions[heading][0] for heading in CONCEPT_HEADINGS]
+        if ordered != sorted(ordered):
+            issues.append(
+                MechanicalIssue("HEADING_ORDER", "concept.md", "必須見出しが指定順ではありません")
+            )
+        else:
+            for index, heading in enumerate(CONCEPT_HEADINGS):
+                start = ordered[index] + 1
+                end = ordered[index + 1] if index + 1 < len(ordered) else len(lines)
+                body = [line for line in lines[start:end] if line.strip()]
+                if not body or all(line.lstrip().startswith("#") for line in body):
+                    issues.append(MechanicalIssue("EMPTY_SECTION", heading, "必須節の本文が空です"))
+    return ConceptMechanicalCheck(normalized, tuple(issues))
 
 
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:

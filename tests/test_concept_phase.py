@@ -6,7 +6,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from story_pipeline.concept import CONCEPT_HEADINGS, build_concept_context
+from story_pipeline.concept import (
+    CONCEPT_HEADINGS,
+    build_concept_context,
+    check_concept_markdown,
+)
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
 from story_pipeline.scaffold import create_scaffold
@@ -58,6 +62,33 @@ class ConceptPhaseTest(unittest.TestCase):
         for heading in CONCEPT_HEADINGS:
             self.assertIn(heading, context.messages[0]["content"])
         self.assertIn("指定順で一度ずつ", context.messages[-1]["content"])
+
+    def test_mechanical_check_normalizes_single_fence(self) -> None:
+        body = "\n\n".join(f"{heading}\n内容" for heading in CONCEPT_HEADINGS)
+        checked = check_concept_markdown(f"```markdown\n{body}\n```")
+        self.assertTrue(checked.accepted)
+        self.assertFalse(checked.content.startswith("```"))
+
+    def test_mechanical_check_reports_structure_and_template_issues(self) -> None:
+        body = "\n\n".join(
+            f"{heading}\n{'<!-- 記入 -->' if index == 0 else '内容'}"
+            for index, heading in enumerate(reversed(CONCEPT_HEADINGS))
+        )
+        checked = check_concept_markdown(body)
+        self.assertFalse(checked.accepted)
+        self.assertEqual(
+            {issue.code for issue in checked.issues},
+            {"TEMPLATE_COMMENT", "HEADING_ORDER"},
+        )
+
+    def test_mechanical_check_reports_missing_duplicate_and_empty_sections(self) -> None:
+        headings = list(CONCEPT_HEADINGS)
+        body = "\n\n".join(f"{heading}\n内容" for heading in headings[:-1])
+        body = body.replace(f"{headings[1]}\n内容", f"{headings[1]}\n\n{headings[1]}\n内容")
+        checked = check_concept_markdown(body)
+        codes = {issue.code for issue in checked.issues}
+        self.assertIn("MISSING_HEADING", codes)
+        self.assertIn("DUPLICATE_HEADING", codes)
 
 
 if __name__ == "__main__":
