@@ -52,9 +52,36 @@ class RequestScopeTest(unittest.TestCase):
         (self.root / "requests" / "0001.md").write_text("続きを書いてください。\n")
         selected = select_request(self.root, self.state)
         self.assertEqual((selected.number, selected.mode), (1, "pending"))
+        (self.root / "requests" / "0001.md").write_text(
+            "# 追加要求\n\n<!-- 要求を記述してください。 -->\n"
+        )
         self.state["active_request"] = 0
         selected = select_request(self.root, self.state)
         self.assertEqual((selected.number, selected.mode), (0, "resume"))
+
+    def test_active_run_allows_empty_followup_template(self) -> None:
+        self.state["active_request"] = 0
+        (self.root / ".story-pipeline/runs/0000.json").write_text("{}\n", encoding="utf-8")
+        (self.root / "requests/0001.md").write_text(
+            "# 追加要求\n\n<!-- 要求を記述してください。 -->\n", encoding="utf-8"
+        )
+
+        selected = select_request(self.root, self.state)
+
+        self.assertEqual((selected.number, selected.mode), (0, "resume"))
+
+    def test_active_run_rejects_meaningful_followup(self) -> None:
+        self.state["active_request"] = 0
+        (self.root / ".story-pipeline/runs/0000.json").write_text("{}\n", encoding="utf-8")
+        (self.root / "requests/0001.md").write_text(
+            "# 追加要求\n\n主人公の名前も変えてください。\n", encoding="utf-8"
+        )
+
+        with self.assertRaisesRegex(StoryPipelineError, "具体的な後続要求") as raised:
+            select_request(self.root, self.state)
+
+        self.assertEqual(raised.exception.exit_code, 8)
+        self.assertEqual(raised.exception.location, "requests/0001.md")
 
     def test_template_only_request_requires_human_input(self) -> None:
         create_root = Path(tempfile.mkdtemp(dir=self.root))
