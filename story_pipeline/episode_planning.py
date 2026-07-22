@@ -237,6 +237,90 @@ def episode_plan_generation_response_format(episode_number: int) -> dict[str, An
     }
 
 
+def check_episode_plan_candidate(
+    candidate: EpisodePlanCandidate,
+) -> EpisodePlanMechanicalCheck:
+    """内容を創作せず、話計画を正規化して固定構造と目標文字数を検査する。"""
+    issues: list[EpisodePlanMechanicalIssue] = []
+    path = f"episode_plans/{candidate.episode_number:04d}.md"
+    if candidate.path != path:
+        issues.append(
+            EpisodePlanMechanicalIssue(
+                "TARGET_PATH_MISMATCH", candidate.path, "対象話の話計画パスと一致しません"
+            )
+        )
+    try:
+        normalized = validate_markdown(candidate.content)
+    except StoryPipelineError as error:
+        issues.append(EpisodePlanMechanicalIssue("INVALID_MARKDOWN", path, error.reason))
+        return EpisodePlanMechanicalCheck(path, candidate.content, None, tuple(issues))
+    if any(line.strip().startswith("```") for line in normalized.splitlines()):
+        issues.append(
+            EpisodePlanMechanicalIssue("FENCE_REMAINS", path, "Markdown fence が本文内に残っています")
+        )
+    if re.search(r"<!--[\s\S]*?-->", normalized):
+        issues.append(
+            EpisodePlanMechanicalIssue("TEMPLATE_COMMENT", path, "HTML コメントが残っています")
+        )
+    lines = normalized.splitlines()
+    positions: dict[str, list[int]] = {heading: [] for heading in EPISODE_PLAN_HEADINGS}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped in positions:
+            positions[stripped].append(index)
+    for heading in EPISODE_PLAN_HEADINGS:
+        found = positions[heading]
+        if not found:
+            issues.append(
+                EpisodePlanMechanicalIssue("MISSING_HEADING", f"{path} {heading}", "必須見出しがありません")
+            )
+        elif len(found) > 1:
+            issues.append(
+                EpisodePlanMechanicalIssue("DUPLICATE_HEADING", f"{path} {heading}", "必須見出しが重複しています")
+            )
+    all_positions = [position for found in positions.values() for position in found]
+    first = positions[EPISODE_PLAN_HEADINGS[0]]
+    if first and all_positions and first[0] == min(all_positions):
+        preamble = [line.strip() for line in lines[: first[0]] if line.strip()]
+        if preamble and not (len(preamble) == 1 and preamble[0].startswith("# ")):
+            issues.append(
+                EpisodePlanMechanicalIssue("UNEXPECTED_PREAMBLE", path, "最初の必須見出しより前に説明文があります")
+            )
+    if all(len(positions[heading]) == 1 for heading in EPISODE_PLAN_HEADINGS):
+        ordered = [positions[heading][0] for heading in EPISODE_PLAN_HEADINGS]
+        if ordered != sorted(ordered):
+            issues.append(
+                EpisodePlanMechanicalIssue("HEADING_ORDER", path, "必須見出しが指定順ではありません")
+            )
+        else:
+            for index, heading in enumerate(EPISODE_PLAN_HEADINGS):
+                start = ordered[index] + 1
+                end = ordered[index + 1] if index + 1 < len(ordered) else len(lines)
+                body = [line for line in lines[start:end] if line.strip()]
+                if not body or all(line.lstrip().startswith("#") for line in body):
+                    issues.append(
+                        EpisodePlanMechanicalIssue("EMPTY_SECTION", f"{path} {heading}", "必須節の本文が空です")
+                    )
+    target_length: int | None = None
+    length_body = _section_body(normalized, "## 目標文字数")
+    length_values = re.findall(r"(?<![0-9,])([0-9]+(?:,[0-9]{3})*)\s*字(?![0-9])", length_body)
+    if len(length_values) != 1:
+        issues.append(
+            EpisodePlanMechanicalIssue(
+                "INVALID_TARGET_LENGTH", f"{path} ## 目標文字数", "正の整数の目標文字数を1件だけ記載する必要があります"
+            )
+        )
+    else:
+        target_length = int(length_values[0].replace(",", ""))
+        if target_length <= 0:
+            issues.append(
+                EpisodePlanMechanicalIssue(
+                    "INVALID_TARGET_LENGTH", f"{path} ## 目標文字数", "目標文字数は正の整数である必要があります"
+                )
+            )
+    return EpisodePlanMechanicalCheck(path, normalized, target_length, tuple(issues))
+
+
 def _documents_text(documents: tuple[ContextDocument, ...]) -> str:
     return "\n\n".join(document.delimited() for document in documents)
 

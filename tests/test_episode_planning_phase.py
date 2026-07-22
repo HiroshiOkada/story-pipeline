@@ -10,6 +10,7 @@ from story_pipeline.episode_planning import (
     DEFAULT_EPISODE_PLANNING_CONTEXT,
     EPISODE_PLAN_HEADINGS,
     build_episode_planning_context,
+    check_episode_plan_candidate,
     episode_plan_generation_response_format,
     parse_episode_plan_candidate,
 )
@@ -83,6 +84,33 @@ class EpisodePlanningPhaseTest(unittest.TestCase):
         schema = episode_plan_generation_response_format(2)["json_schema"]["schema"]
         self.assertEqual(schema["properties"]["path"]["const"], "episode_plans/0002.md")
         self.assertFalse(schema["additionalProperties"])
+
+    def test_mechanical_check_accepts_complete_plan_and_normalizes_fence(self) -> None:
+        content = "```markdown\n# 第2話\n\n" + "\n\n".join(
+            f"{heading}\n{'8,000字' if heading == '## 目標文字数' else '内容'}"
+            for heading in EPISODE_PLAN_HEADINGS
+        ) + "\n```"
+        candidate = parse_episode_plan_candidate(
+            json.dumps({"path": "episode_plans/0002.md", "content": content}),
+            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+        )
+        checked = check_episode_plan_candidate(candidate)
+        self.assertTrue(checked.accepted)
+        self.assertEqual(checked.target_length, 8000)
+        self.assertFalse(checked.content.startswith("```"))
+
+    def test_mechanical_check_reports_order_empty_section_and_invalid_length(self) -> None:
+        content = "\n\n".join(
+            f"{heading}\n{'0字' if heading == '## 目標文字数' else ('' if heading == '## 場面' else '内容')}"
+            for heading in reversed(EPISODE_PLAN_HEADINGS)
+        )
+        candidate = parse_episode_plan_candidate(
+            json.dumps({"path": "episode_plans/0002.md", "content": content}),
+            episode_number=2, generation=1, model_reference="mock", input_hashes=(),
+        )
+        codes = {issue.code for issue in check_episode_plan_candidate(candidate).issues}
+        self.assertIn("HEADING_ORDER", codes)
+        self.assertIn("INVALID_TARGET_LENGTH", codes)
 
 
 if __name__ == "__main__":
