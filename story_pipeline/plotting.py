@@ -11,7 +11,12 @@ from typing import Any
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
 from story_pipeline.errors import StoryPipelineError
-from story_pipeline.llm_output import FieldRule, parse_json_object, validate_markdown
+from story_pipeline.llm_output import (
+    FieldRule,
+    parse_json_object,
+    validate_evaluation,
+    validate_markdown,
+)
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -103,6 +108,40 @@ class PlottingMechanicalCheck:
     @property
     def documents(self) -> tuple[tuple[str, str], ...]:
         return (("plot.md", self.plot), *self.chapters)
+
+
+@dataclass(frozen=True, slots=True)
+class PlottingEvaluationIssue:
+    severity: str
+    category: str
+    location: str
+    evidence: str
+    instruction: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlottingEvaluation:
+    decision: str
+    summary: str
+    issues: tuple[PlottingEvaluationIssue, ...]
+    scores: tuple[tuple[str, int], ...]
+
+    @property
+    def has_error(self) -> bool:
+        return any(issue.severity == "error" for issue in self.issues)
+
+    @property
+    def adoptable(self) -> bool:
+        return self.decision == "accept" and not self.has_error
+
+    def score(self, name: str) -> int:
+        return dict(self.scores)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluatedPlottingCandidate:
+    candidate: PlottingCandidate
+    evaluation: PlottingEvaluation
 
 
 def build_plotting_context(
@@ -209,6 +248,80 @@ def plotting_generation_response_format() -> dict[str, Any]:
     return {
         "type": "json_schema",
         "json_schema": {"name": "plotting_candidate", "strict": True, "schema": schema},
+    }
+
+
+def parse_plotting_evaluation(content: str) -> PlottingEvaluation:
+    """共通評価契約と全体構成の比較に必要な score を検証する。"""
+    value = validate_evaluation(content)
+    required_scores = {
+        "request_fit",
+        "foundation_fit",
+        "causal_consistency",
+        "foreshadowing",
+    }
+    missing = required_scores - value["scores"].keys()
+    if missing:
+        raise _plotting_format_error(
+            f"全体構成評価に必須 score がありません: {sorted(missing)[0]}"
+        )
+    issues = tuple(
+        PlottingEvaluationIssue(
+            item["severity"],
+            item["category"],
+            item["location"],
+            item["evidence"],
+            item["instruction"],
+        )
+        for item in value["issues"]
+    )
+    return PlottingEvaluation(
+        value["decision"], value["summary"], issues, tuple(sorted(value["scores"].items()))
+    )
+
+
+def plotting_evaluation_response_format() -> dict[str, Any]:
+    """reviewer へ渡す厳格な全体構成評価 JSON Schema。"""
+    issue = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            "category": {"type": "string"},
+            "location": {"type": "string"},
+            "evidence": {"type": "string"},
+            "instruction": {"type": "string"},
+        },
+    }
+    required_scores = (
+        "request_fit",
+        "foundation_fit",
+        "causal_consistency",
+        "foreshadowing",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decision", "summary", "issues", "scores"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["accept", "revise", "awaiting_human"]},
+            "summary": {"type": "string"},
+            "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 5},
+                "required": list(required_scores),
+                "properties": {
+                    name: {"type": "integer", "minimum": 1, "maximum": 5}
+                    for name in required_scores
+                },
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "plotting_evaluation", "strict": True, "schema": schema},
     }
 
 

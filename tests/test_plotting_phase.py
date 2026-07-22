@@ -14,6 +14,8 @@ from story_pipeline.plotting import (
     build_plotting_context,
     check_plotting_candidate,
     parse_plotting_candidate,
+    parse_plotting_evaluation,
+    plotting_evaluation_response_format,
     plotting_generation_response_format,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -137,6 +139,41 @@ class PlottingPhaseTest(unittest.TestCase):
         self.assertIn("CHAPTER_NOT_IN_PLOT", codes)
         self.assertIn("EPISODE_RANGE_SEQUENCE", codes)
         self.assertIn("HEADING_ORDER", codes)
+
+    def test_evaluation_requires_plotting_scores_and_error_blocks_adoption(self) -> None:
+        value = {
+            "decision": "accept",
+            "summary": "採用可能",
+            "issues": [],
+            "scores": {
+                "request_fit": 5,
+                "foundation_fit": 5,
+                "causal_consistency": 4,
+                "foreshadowing": 4,
+            },
+        }
+        self.assertTrue(parse_plotting_evaluation(json.dumps(value)).adoptable)
+        value["issues"] = [
+            {
+                "severity": "error",
+                "category": "causality",
+                "location": "plot.md ## 結末",
+                "evidence": "転換点から結末へ接続しない",
+                "instruction": "因果を追加する",
+            }
+        ]
+        self.assertFalse(parse_plotting_evaluation(json.dumps(value)).adoptable)
+        del value["scores"]["foreshadowing"]
+        with self.assertRaises(StoryPipelineError):
+            parse_plotting_evaluation(json.dumps(value))
+
+    def test_evaluation_schema_requires_causality_and_foreshadowing(self) -> None:
+        schema = plotting_evaluation_response_format()["json_schema"]["schema"]
+        self.assertEqual(
+            set(schema["properties"]["scores"]["required"]),
+            {"request_fit", "foundation_fit", "causal_consistency", "foreshadowing"},
+        )
+        self.assertFalse(schema["additionalProperties"])
 
 
 if __name__ == "__main__":
