@@ -38,6 +38,13 @@ PHASE_REQUESTS = {
 }
 
 
+class StoryExecutionFailure(RuntimeError):
+    def __init__(self, story: StoryMeasurement, diagnostic: dict[str, Any]) -> None:
+        super().__init__(diagnostic["failure"])
+        self.story = story
+        self.diagnostic = diagnostic
+
+
 def main(arguments: list[str] | None = None) -> int:
     values = sys.argv[1:] if arguments is None else arguments
     if len(values) != 2:
@@ -53,7 +60,42 @@ def main(arguments: list[str] | None = None) -> int:
         for index, premise in enumerate(STORIES, 1):
             if not may_start_next_story(cumulative):
                 break
-            story = _execute_story(temporary / f"story-{index}", command, environment, premise)
+            try:
+                story = _execute_story(
+                    temporary / f"story-{index}", command, environment, premise
+                )
+            except StoryExecutionFailure as error:
+                story = error.story
+                cost = story.cost_usd
+                results.append({
+                    "story": index,
+                    "passed": False,
+                    "failures": ["EXECUTION_FAILED"],
+                    "diagnostic": error.diagnostic,
+                    "wall_seconds": story.wall_seconds,
+                    "logical_calls": story.logical_calls,
+                    "transport_attempts": story.transport_attempts,
+                    "draft_writer_calls": story.draft_writer_calls,
+                    "cost_usd": None if cost is None else str(cost),
+                    "runs": _run_results(story),
+                })
+                if cost is not None:
+                    cumulative += cost
+                break
+            except Exception as error:
+                results.append({
+                    "story": index,
+                    "passed": False,
+                    "failures": ["HARNESS_FAILED"],
+                    "diagnostic": {"exception_class": type(error).__name__},
+                    "wall_seconds": None,
+                    "logical_calls": 0,
+                    "transport_attempts": 0,
+                    "draft_writer_calls": 0,
+                    "cost_usd": None,
+                    "runs": [],
+                })
+                break
             failures = story_failures(story, cumulative_cost_before=cumulative)
             cost = story.cost_usd
             results.append({
@@ -65,7 +107,7 @@ def main(arguments: list[str] | None = None) -> int:
                 "transport_attempts": story.transport_attempts,
                 "draft_writer_calls": story.draft_writer_calls,
                 "cost_usd": None if cost is None else str(cost),
-                "runs": [asdict(item) | {"cost_usd": None if item.cost_usd is None else str(item.cost_usd)} for item in story.runs],
+                "runs": _run_results(story),
             })
             if failures or cost is None:
                 break
@@ -106,11 +148,14 @@ def _execute_story(
         completed = _run(
             command, "run", cwd=root, env=environment, timeout=20 * 60, check=False
         )
-        if completed.returncode != 0:
-            raise RuntimeError(f"story run failed: phase={phase} code={completed.returncode}")
-        _run(command, "validate", cwd=root, env=environment)
         run = _json(root / ".story-pipeline/runs" / f"{request_number:04d}.json")
         measurements.append(measure_run(run, phase))
+        if completed.returncode != 0:
+            raise StoryExecutionFailure(
+                StoryMeasurement(tuple(measurements), time.monotonic() - started),
+                _failure_diagnostic(root, run, phase, completed.returncode),
+            )
+        _run(command, "validate", cwd=root, env=environment)
         expected = f"?? requests/{request_number + 1:04d}.md\n"
         status = _run("git", "-C", root, "status", "--short").stdout
         if status != expected:
@@ -119,6 +164,42 @@ def _execute_story(
     if state["phase"] != "completed":
         raise RuntimeError(f"story did not complete: phase={state['phase']}")
     return StoryMeasurement(tuple(measurements), time.monotonic() - started)
+
+
+def _failure_diagnostic(
+    root: Path, run: dict[str, Any], phase: str, exit_code: int
+) -> dict[str, Any]:
+    checkpoint_path = root / ".story-pipeline/checkpoints" / f"{run['request_number']:04d}" / "draft.json"
+    checkpoint = _json(checkpoint_path) if checkpoint_path.is_file() else None
+    return {
+        "failure": f"story run failed: phase={phase} code={exit_code}",
+        "phase": phase,
+        "exit_code": exit_code,
+        "run_status": run["status"],
+        "current_step": run["current_step"],
+        "resume": run["resume"],
+        "steps": [
+            {"id": item["id"], "status": item["status"], "result": item["result"]}
+            for item in run["steps"]
+        ],
+        "errors": run["errors"],
+        "incidents": run["incidents"],
+        "checkpoint": (
+            None if checkpoint is None else {
+                "request_revision": checkpoint["request_revision"],
+                "candidate_sha256": checkpoint["candidate"]["sha256"],
+                "knowledge_status": checkpoint["knowledge"]["status"],
+                "adoption_status": checkpoint["adoption"]["status"],
+            }
+        ),
+    }
+
+
+def _run_results(story: StoryMeasurement) -> list[dict[str, Any]]:
+    return [
+        asdict(item) | {"cost_usd": None if item.cost_usd is None else str(item.cost_usd)}
+        for item in story.runs
+    ]
 
 
 def _configure(root: Path) -> None:
