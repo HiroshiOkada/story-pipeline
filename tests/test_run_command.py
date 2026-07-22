@@ -18,6 +18,7 @@ from story_pipeline.llm_transport import ApiFailure, ChatResponse
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.interruptions import TerminationSignal
 from story_pipeline.run_command import run_command
+from story_pipeline.run_execution import _changed_document_paths
 from story_pipeline.run_start import prepare_run
 from story_pipeline.scaffold import create_scaffold
 
@@ -96,6 +97,18 @@ class FakeClient:
 
 
 class InitializedRunCommandIntegrationTest(unittest.TestCase):
+    def test_changed_document_paths_excludes_unchanged_adoption_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "existing.md").write_text("同じ内容\n", encoding="utf-8")
+
+            paths = _changed_document_paths(root, (
+                ("existing.md", "同じ内容\n"),
+                ("new.md", "新しい内容\n"),
+            ))
+
+        self.assertEqual(paths, ("new.md",))
+
     def test_init_request_edit_and_fake_run_adopt_concept(self) -> None:
         identity = {
             "GIT_AUTHOR_NAME": "Test",
