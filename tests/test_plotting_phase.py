@@ -92,6 +92,8 @@ class PlottingPhaseTest(unittest.TestCase):
         context = build_plotting_context(self.root, self.request, self.interpretation)
         for heading in (*PLOT_HEADINGS, *CHAPTER_HEADINGS):
             self.assertIn(heading, context.messages[0]["content"])
+        self.assertIn("0001〜0003", context.messages[0]["content"])
+        self.assertIn("path をそのまま記載", context.messages[0]["content"])
         schema = plotting_generation_response_format()["json_schema"]["schema"]
         self.assertEqual(set(schema["required"]), {"plot.md", "chapters"})
         self.assertEqual(schema["properties"]["chapters"]["minItems"], 1)
