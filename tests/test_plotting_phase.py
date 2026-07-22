@@ -10,13 +10,18 @@ from story_pipeline.errors import StoryPipelineError
 from story_pipeline.plotting import (
     CHAPTER_HEADINGS,
     DEFAULT_PLOTTING_CONTEXT,
+    EvaluatedPlottingCandidate,
     PLOT_HEADINGS,
+    PlottingCandidate,
     build_plotting_context,
+    build_plotting_revision_messages,
     check_plotting_candidate,
     parse_plotting_candidate,
     parse_plotting_evaluation,
     plotting_evaluation_response_format,
     plotting_generation_response_format,
+    run_plotting_revision_loop,
+    select_best_plotting,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
 from story_pipeline.request_selection import select_request
@@ -174,6 +179,62 @@ class PlottingPhaseTest(unittest.TestCase):
             {"request_fit", "foundation_fit", "causal_consistency", "foreshadowing"},
         )
         self.assertFalse(schema["additionalProperties"])
+
+    def test_revision_loop_preserves_bundle_and_stops_on_accept(self) -> None:
+        context = build_plotting_context(self.root, self.request, self.interpretation)
+        scores = {
+            "request_fit": 5,
+            "foundation_fit": 5,
+            "causal_consistency": 5,
+            "foreshadowing": 5,
+        }
+        revise_evaluation = parse_plotting_evaluation(
+            json.dumps({"decision": "revise", "summary": "改稿", "issues": [], "scores": scores})
+        )
+        accepted = parse_plotting_evaluation(
+            json.dumps({"decision": "accept", "summary": "採用", "issues": [], "scores": scores})
+        )
+        initial = EvaluatedPlottingCandidate(
+            PlottingCandidate("初稿", (("chapters/0001.md", "初稿"),), 1, "writer", context.input_hashes),
+            revise_evaluation,
+        )
+
+        def revise(candidate, evaluation, revision_count):
+            messages = build_plotting_revision_messages(context, candidate, evaluation)
+            self.assertIn("BEGIN PLOTTING CANDIDATE", messages[-3]["content"])
+            return PlottingCandidate(
+                "改稿",
+                (("chapters/0001.md", "改稿"),),
+                2,
+                "reviser",
+                context.input_hashes,
+                revision_count,
+            )
+
+        records = run_plotting_revision_loop(initial, 3, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertIs(select_best_plotting(records), records[-1])
+
+    def test_best_plotting_prefers_scores_then_fewer_revisions(self) -> None:
+        evaluation = parse_plotting_evaluation(
+            json.dumps(
+                {
+                    "decision": "accept",
+                    "summary": "採用",
+                    "issues": [],
+                    "scores": {
+                        "request_fit": 5,
+                        "foundation_fit": 5,
+                        "causal_consistency": 5,
+                        "foreshadowing": 5,
+                    },
+                }
+            )
+        )
+        chapters = (("chapters/0001.md", "内容"),)
+        first = EvaluatedPlottingCandidate(PlottingCandidate("A", chapters, 1, "writer", ()), evaluation)
+        revised = EvaluatedPlottingCandidate(PlottingCandidate("B", chapters, 2, "reviser", (), 1), evaluation)
+        self.assertIs(select_best_plotting([revised, first]), first)
 
 
 if __name__ == "__main__":
