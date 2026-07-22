@@ -8,10 +8,15 @@ import unittest
 
 from story_pipeline.concept import (
     CONCEPT_HEADINGS,
+    ConceptCandidate,
+    EvaluatedConceptCandidate,
     build_concept_context,
+    build_concept_revision_messages,
     check_concept_markdown,
     concept_evaluation_response_format,
     parse_concept_evaluation,
+    run_concept_revision_loop,
+    select_best_concept,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -132,6 +137,75 @@ class ConceptPhaseTest(unittest.TestCase):
             set(schema["properties"]["scores"]["required"]),
             {"request_fit", "consistency"},
         )
+
+    def test_revision_loop_stops_on_accept_and_preserves_bounded_context(self) -> None:
+        context = build_concept_context(self.root, self.request, self.interpretation)
+        initial_candidate = ConceptCandidate("初稿\n", 1, "writer", context.input_hashes)
+        revise_value = {
+            "decision": "revise",
+            "summary": "改稿が必要",
+            "issues": [],
+            "scores": {"request_fit": 3, "consistency": 3},
+        }
+        accept_value = {
+            "decision": "accept",
+            "summary": "採用可能",
+            "issues": [],
+            "scores": {"request_fit": 5, "consistency": 5},
+        }
+        initial = EvaluatedConceptCandidate(
+            initial_candidate,
+            parse_concept_evaluation(json.dumps(revise_value)),
+        )
+
+        def revise(candidate, evaluation, revision_count):
+            messages = build_concept_revision_messages(context, candidate, evaluation)
+            self.assertIn("BEGIN CONCEPT CANDIDATE", messages[-3]["content"])
+            return ConceptCandidate("改稿\n", 2, "reviser", context.input_hashes, revision_count)
+
+        def review(_candidate):
+            return parse_concept_evaluation(json.dumps(accept_value))
+
+        records = run_concept_revision_loop(initial, 3, revise, review)
+        self.assertEqual(len(records), 2)
+        self.assertTrue(records[-1].evaluation.adoptable)
+
+    def test_revision_loop_stops_for_human_and_obeys_limit(self) -> None:
+        awaiting = parse_concept_evaluation(
+            json.dumps(
+                {
+                    "decision": "awaiting_human",
+                    "summary": "判断が必要",
+                    "issues": [],
+                    "scores": {"request_fit": 3, "consistency": 3},
+                }
+            )
+        )
+        candidate = ConceptCandidate("候補\n", 1, "writer", ())
+        records = run_concept_revision_loop(
+            EvaluatedConceptCandidate(candidate, awaiting),
+            3,
+            lambda *_: self.fail("改稿してはいけません"),
+            lambda _: self.fail("評価してはいけません"),
+        )
+        self.assertEqual(len(records), 1)
+
+    def test_best_candidate_uses_scores_then_fewer_revisions(self) -> None:
+        evaluation = parse_concept_evaluation(
+            json.dumps(
+                {
+                    "decision": "accept",
+                    "summary": "採用可能",
+                    "issues": [],
+                    "scores": {"request_fit": 5, "consistency": 5},
+                }
+            )
+        )
+        first = EvaluatedConceptCandidate(ConceptCandidate("A", 1, "writer", ()), evaluation)
+        revised = EvaluatedConceptCandidate(
+            ConceptCandidate("B", 2, "reviser", (), 1), evaluation
+        )
+        self.assertIs(select_best_concept([revised, first]), first)
 
 
 if __name__ == "__main__":
