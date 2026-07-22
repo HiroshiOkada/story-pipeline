@@ -32,6 +32,8 @@ class WorkflowExecution:
     calls: tuple[ExecutedCall, ...]
     evaluation: str | None
     reason: str | None
+    internal_files: tuple[str, ...] = ()
+    diagnostics: tuple[Any, ...] = ()
 
 
 def execute_planned_workflow(
@@ -39,6 +41,8 @@ def execute_planned_workflow(
     state: dict[str, Any],
     planned: PlannedRequest,
     client: LLMClient,
+    *,
+    request_revision: int = 0,
 ) -> WorkflowExecution:
     """決定済み scope を実行し、採用可能な文書だけを返す。"""
     phase = planned.scope.phase
@@ -71,7 +75,10 @@ def execute_planned_workflow(
         updates = {"phase": "drafting"} if documents else {}
     elif phase == "drafting":
         number = _target_number(planned.scope.targets[0], state["next_episode"])
-        result = produce_draft(root, request, interpretation, number, client)
+        result = produce_draft(
+            root, request, interpretation, number, client,
+            request_revision=request_revision,
+        )
         documents = (
             ()
             if result.best is None
@@ -138,8 +145,15 @@ def execute_planned_workflow(
 
     calls = tuple(ExecutedCall(item.role, item.purpose, item.completion) for item in result.calls)
     evaluation = _evaluation_summary(result)
+    internal_files = (
+        (result.checkpoint_path,)
+        if phase == "drafting" and result.checkpoint_path is not None
+        else ()
+    )
+    diagnostics = tuple(getattr(result, "diagnostics", ()))
     return WorkflowExecution(
-        result.status, phase, tuple(dict(documents).items()), updates, calls, evaluation, result.reason
+        result.status, phase, tuple(dict(documents).items()), updates, calls, evaluation,
+        result.reason, internal_files, diagnostics,
     )
 
 

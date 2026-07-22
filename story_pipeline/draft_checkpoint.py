@@ -23,6 +23,7 @@ from story_pipeline.drafting import (
     DraftMechanicalIssue,
     DraftingContext,
     EvaluatedDraftCandidate,
+    check_draft_candidate,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.persistence import atomic_write_json
@@ -52,6 +53,9 @@ def create_pending_checkpoint(
         raise ValueError("checkpoint には非負の要求 revision と採用可能な評価が必要です")
     candidate = best.candidate
     content_hash = _digest(candidate.content)
+    mechanical = check_draft_candidate(
+        candidate, context.target_length, tolerance=context.length_tolerance
+    )
     timestamp = now or _utc_timestamp()
     value: dict[str, Any] = {
         "schema_version": 1,
@@ -67,9 +71,17 @@ def create_pending_checkpoint(
             "revision_count": candidate.revision_count,
             "model_reference": candidate.model_reference,
             "mechanical": {
-                "character_count": _body_character_count(candidate.content),
-                "target_length": context.target_length,
-                "issues": [],
+                "character_count": mechanical.character_count,
+                "target_length": mechanical.target_length,
+                "issues": [
+                    {
+                        "severity": item.severity,
+                        "code": item.code,
+                        "location": item.location,
+                        "message": item.message,
+                    }
+                    for item in mechanical.issues
+                ],
             },
         },
         "evaluation": {
@@ -259,6 +271,9 @@ def validate_checkpoint_data(
     _keys(mechanical, {"character_count", "target_length", "issues"}, f"{location}/candidate/mechanical")
     if not isinstance(mechanical["issues"], list):
         raise ValueError(f"{location}/candidate/mechanical/issues は配列である必要があります")
+    for issue in mechanical["issues"]:
+        if not isinstance(issue, dict) or set(issue) != {"severity", "code", "location", "message"}:
+            raise ValueError(f"{location}/candidate/mechanical/issues の要素が不正です")
     evaluation = _object(value["evaluation"], f"{location}/evaluation")
     _keys(evaluation, {"target_sha256", "decision", "summary", "issues", "scores", "model_reference"}, f"{location}/evaluation")
     if evaluation["target_sha256"] != candidate["sha256"] or evaluation["decision"] != "accept":

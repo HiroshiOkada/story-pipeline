@@ -110,7 +110,11 @@ def validate_run_data(
     _string(run["current_step"], f"{location}#/current_step")
     _validate_steps(run["steps"], location)
     counts = _object(run["call_counts"], f"{location}#/call_counts")
-    _keys(counts, {"generation", "review", "revision", "summary"}, f"{location}#/call_counts")
+    if set(counts) not in (
+        {"generation", "review", "revision", "summary"},
+        {"generation", "review", "revision", "knowledge", "summary"},
+    ):
+        _fail("call_counts のキーが不正です", f"{location}#/call_counts")
     for name, value in counts.items():
         _bounded_integer(value, f"{location}#/call_counts/{name}", 0, 2**63 - 1)
     for name in ("model_attempts", "fallbacks"):

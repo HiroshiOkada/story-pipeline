@@ -55,13 +55,20 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         run = _finish(start, run, current, "completed", result="制作コンテキストを検証")
 
         run, current = _begin(start, run, "generate")
-        workflow = execute_planned_workflow(start.root, start.state, planned, start.client)
+        workflow = execute_planned_workflow(
+            start.root,
+            start.state,
+            planned,
+            start.client,
+            request_revision=len(run["request_revisions"]) - 1,
+        )
         for call in workflow.calls:
             run = _record_completion(start, run, call.purpose, call.role, call.completion)
         generate_status = "failed" if workflow.status == "failed" else "completed"
         run = _finish(start, run, current, generate_status, result=workflow.reason or workflow.evaluation)
 
         run = _derived_steps(start, run, workflow)
+        changed = workflow.internal_files
         status = workflow.status
         documents = workflow.documents if status == "completed" else ()
         if documents and _changed_lines(start.root, documents) >= start.config["limits"]["max_changed_lines"]:
@@ -82,7 +89,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
             for path, content in documents:
                 atomic_write_text(start.root / path, content)
             output_hashes = {path: sha256_file(start.root / path) for path, _ in documents}
-            changed = tuple(output_hashes)
+            changed = tuple(dict.fromkeys((*changed, *output_hashes)))
             run = _finish(start, run, current, "completed", output_hashes=output_hashes, result="採用候補を保存")
         else:
             run = _finish(start, run, current, "skipped", result=workflow.reason or "採用変更なし")
@@ -149,7 +156,7 @@ def _finish(start: RunStart, run: dict[str, Any], identifier: str, status: str, 
 
 def _record_completion(start: RunStart, run: dict[str, Any], category: str, role: str, completion: Any) -> dict[str, Any]:
     normalized = "summary" if category == "summary" else category
-    if normalized not in {"generation", "review", "revision"}:
+    if normalized not in {"generation", "review", "revision", "knowledge"}:
         normalized = "generation"
     timestamp = utc_timestamp()
     model = start.config["models"][completion.model_reference]["model"]
@@ -184,6 +191,18 @@ def _derived_steps(start: RunStart, run: dict[str, Any], workflow: WorkflowExecu
     for identifier, status in values:
         run, actual = _begin(start, run, identifier)
         run = _finish(start, run, actual, status)
+    if workflow.phase == "drafting":
+        diagnostic_by_boundary: dict[str, list[Any]] = {}
+        for item in workflow.diagnostics:
+            diagnostic_by_boundary.setdefault(item.boundary, []).append(item)
+        for boundary in ("draft_json", "mechanical", "evaluation", "knowledge", "checkpoint"):
+            items = diagnostic_by_boundary.get(boundary, [])
+            result = "; ".join(
+                f"{item.code}[{item.attempt}]: {item.reason}" for item in items
+            ) or "検証エラーなし"
+            run, actual = _begin(start, run, f"draft_{boundary}")
+            status = "failed" if items and boundary != "checkpoint" else "completed"
+            run = _finish(start, run, actual, status, result=result)
     return run
 
 

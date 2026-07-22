@@ -95,6 +95,10 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertIn("改稿", result.best.candidate.content)
         self.assertEqual(result.knowledge_update.canon_facts[0].source, "episodes/0001.md")
         self.assertFalse((self.root / "episodes" / "0001.md").exists())
+        self.assertEqual(result.checkpoint_path, ".story-pipeline/checkpoints/0000/draft.json")
+        self.assertTrue((self.root / result.checkpoint_path).is_file())
+        self.assertIn("MISSING_HEADING", {item.code for item in result.diagnostics})
+        self.assertNotIn("不完全", " ".join(item.reason for item in result.diagnostics))
 
     def test_mock_workflow_returns_awaiting_human_without_knowledge_call(self) -> None:
         client = FakeClient([draft_payload("判断候補"), evaluation("awaiting_human", 3)])
