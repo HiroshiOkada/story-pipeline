@@ -103,6 +103,11 @@ class DraftingWorkflowTest(unittest.TestCase):
         self.assertTrue((self.root / result.checkpoint_path).is_file())
         self.assertIn("DRAFT_JSON_INVALID", {item.code for item in result.diagnostics})
         self.assertNotIn("不完全", " ".join(item.reason for item in result.diagnostics))
+        decisions = [item for item in result.diagnostics if item.code.startswith("DECISION_")]
+        self.assertEqual([item.code for item in decisions], ["DECISION_REVISE", "DECISION_ACCEPT"])
+        self.assertIn("errors=0,warnings=0,notes=0", decisions[-1].reason)
+        self.assertIn("consistency=5", decisions[-1].reason)
+        self.assertNotIn("採用可能", decisions[-1].reason)
         retry = client.messages[1][-1]["content"]
         self.assertIn("path、title、body", retry)
         schema = client.options[0]["response_format"]["json_schema"]["schema"]

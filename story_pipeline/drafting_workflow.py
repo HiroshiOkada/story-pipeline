@@ -337,7 +337,23 @@ def _review_candidate(
             continue
         calls.append(DraftingCall("reviewer", "review", completion))
         try:
-            return parse_draft_evaluation(completion.response.content)
+            evaluation = parse_draft_evaluation(completion.response.content)
+            severities = {
+                name: sum(item.severity == name for item in evaluation.issues)
+                for name in ("error", "warning", "note")
+            }
+            scores = ",".join(f"{name}={value}" for name, value in evaluation.scores)
+            diagnostics.append(DraftingDiagnostic(
+                "evaluation",
+                f"DECISION_{evaluation.decision.upper()}",
+                attempt,
+                _candidate_hash(candidate),
+                (
+                    f"errors={severities['error']},warnings={severities['warning']},"
+                    f"notes={severities['note']};scores={scores}"
+                ),
+            ))
+            return evaluation
         except StoryPipelineError as error:
             if error.exit_code != 7:
                 raise
