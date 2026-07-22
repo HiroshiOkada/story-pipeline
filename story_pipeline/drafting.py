@@ -47,6 +47,7 @@ class DraftingContext:
     previous_episode_path: str | None
     next_plan_path: str | None
     target_length: int
+    length_tolerance: float
     messages: tuple[dict[str, str], ...]
     input_hashes: tuple[tuple[str, str], ...]
 
@@ -159,6 +160,10 @@ def build_drafting_context(
             next_plan_path = next_plan
             paths.append(next_plan)
     documents = load_context_documents(root, tuple(paths))
+    documents_by_path = {document.path: document.content for document in documents}
+    length_tolerance = _length_tolerance(
+        request_document.content, documents_by_path.get("style.md", "")
+    )
     interpretation_text = json.dumps(
         {
             "summary": interpretation.summary,
@@ -195,7 +200,7 @@ def build_drafting_context(
     )
     return DraftingContext(
         episode_number, plan_path, previous_episode_path, next_plan_path,
-        target_length, messages, hashes,
+        target_length, length_tolerance, messages, hashes,
     )
 
 
@@ -515,6 +520,7 @@ def parse_draft_knowledge_update(
         {"canon_facts": FieldRule((list,)), "character_states": FieldRule((list,))},
     )
     expected_source = candidate.path
+    draft_body = _section_body(candidate.content, "## 本文")
     canon_facts: list[CanonFact] = []
     for index, item in enumerate(value["canon_facts"]):
         expected = {"fact", "evidence", "source", "established_at", "people"}
@@ -524,7 +530,7 @@ def parse_draft_knowledge_update(
             raise _drafting_format_error(f"canon_facts/{index}/people は空でない文字列の配列である必要があります")
         if len(people) != len(set(people)):
             raise _drafting_format_error(f"canon_facts/{index}/people に重複があります")
-        _validate_update_evidence(item, candidate.content, expected_source, f"canon_facts/{index}")
+        _validate_update_evidence(item, draft_body, expected_source, f"canon_facts/{index}")
         canon_facts.append(CanonFact(
             item["fact"], item["evidence"], item["source"],
             item["established_at"], tuple(people),
@@ -533,7 +539,7 @@ def parse_draft_knowledge_update(
     for index, item in enumerate(value["character_states"]):
         expected = {"character", "state", "evidence", "source", "established_at"}
         _validate_update_object(item, expected, f"character_states/{index}")
-        _validate_update_evidence(item, candidate.content, expected_source, f"character_states/{index}")
+        _validate_update_evidence(item, draft_body, expected_source, f"character_states/{index}")
         character_states.append(CharacterStateUpdate(
             item["character"], item["state"], item["evidence"],
             item["source"], item["established_at"],
@@ -628,6 +634,23 @@ def _target_length(content: str, path: str) -> int:
             "話計画を検証・修正してから本文制作を再開してください", 4,
         )
     return int(values[0].replace(",", ""))
+
+
+def _length_tolerance(request_content: str, style_content: str) -> float:
+    """人間要求、style の順で明記された ±N% を採用し、なければ20%とする。"""
+    pattern = re.compile(r"(?:±|\+/-)\s*([0-9]{1,2})\s*(?:%|％)")
+    for source, location in (
+        (request_content, "current request"), (style_content, "style.md"),
+    ):
+        values = {int(value) for value in pattern.findall(source)}
+        if len(values) > 1:
+            raise StoryPipelineError(
+                "文字数許容幅の指定が同一文書内で競合しています", location,
+                "文字数許容幅を1つの ±N% 指定へ統一してください", 8,
+            )
+        if values:
+            return values.pop() / 100
+    return 0.20
 
 
 def _section_body(content: str, target: str) -> str:

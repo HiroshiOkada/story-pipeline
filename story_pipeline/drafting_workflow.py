@@ -182,7 +182,9 @@ def _generate_valid_candidate(
                 ),
             })
             continue
-        checked = check_draft_candidate(candidate, context.target_length)
+        checked = check_draft_candidate(
+            candidate, context.target_length, tolerance=context.length_tolerance
+        )
         if checked.accepted:
             normalized = DraftCandidate(
                 checked.path, checked.content, candidate.episode_number, candidate.generation,

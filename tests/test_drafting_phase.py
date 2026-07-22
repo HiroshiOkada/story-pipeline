@@ -66,6 +66,7 @@ class DraftingPhaseTest(unittest.TestCase):
         self.assertEqual(context.previous_episode_path, "episodes/0001.md")
         self.assertEqual(context.next_plan_path, "episode_plans/0003.md")
         self.assertEqual(context.target_length, 100)
+        self.assertEqual(context.length_tolerance, 0.20)
         for path in (*DEFAULT_DRAFTING_CONTEXT, "episode_plans/0002.md", "episodes/0001.md", "episode_plans/0003.md"):
             digest = hashlib.sha256((self.root / path).read_bytes()).hexdigest()
             self.assertIn(f"path={path} sha256={digest}", context.messages[3]["content"])
@@ -90,6 +91,17 @@ class DraftingPhaseTest(unittest.TestCase):
         schema = draft_generation_response_format(2)["json_schema"]["schema"]
         self.assertEqual(schema["properties"]["path"]["const"], "episodes/0002.md")
         self.assertFalse(schema["additionalProperties"])
+
+    def test_request_length_tolerance_overrides_style_and_default(self) -> None:
+        (self.root / "requests" / "0000.md").write_text(
+            "# 作品作成要求\n\n第2話を100字±10%で執筆してください。\n", encoding="utf-8"
+        )
+        (self.root / "style.md").write_text(
+            "# style\n\n文字数は±15%を許容する。\n", encoding="utf-8"
+        )
+        request = select_request(self.root, load_state(self.root))
+        context = build_drafting_context(self.root, request, self.interpretation, 2)
+        self.assertEqual(context.length_tolerance, 0.10)
 
     def test_mechanical_check_accepts_normalized_body_within_length(self) -> None:
         content = "```markdown\n## 話タイトル\n潮風\n\n## 本文\n" + "海" * 100 + "\n```"
@@ -207,6 +219,9 @@ class DraftingPhaseTest(unittest.TestCase):
         self.assertEqual(update.canon_facts[0].people, ("凪", "湊"))
         self.assertEqual(update.character_states[0].character, "凪")
         payload["canon_facts"][0]["evidence"] = "本文にない事実"
+        with self.assertRaises(StoryPipelineError):
+            parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
+        payload["canon_facts"][0]["evidence"] = "潮風"
         with self.assertRaises(StoryPipelineError):
             parse_draft_knowledge_update(json.dumps(payload, ensure_ascii=False), candidate)
 
