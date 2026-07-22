@@ -11,7 +11,12 @@ from typing import Any
 
 from story_pipeline.context_builder import ContextDocument, load_context_documents
 from story_pipeline.errors import StoryPipelineError
-from story_pipeline.llm_output import FieldRule, parse_json_object, validate_markdown
+from story_pipeline.llm_output import (
+    FieldRule,
+    parse_json_object,
+    validate_evaluation,
+    validate_markdown,
+)
 from story_pipeline.request_interpretation import RequestInterpretation
 from story_pipeline.request_selection import SelectedRequest
 
@@ -101,6 +106,42 @@ class FoundationMechanicalCheck:
         return dict(self.documents)[path]
 
 
+@dataclass(frozen=True, slots=True)
+class FoundationEvaluationIssue:
+    severity: str
+    category: str
+    location: str
+    evidence: str
+    instruction: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationEvaluation:
+    """検証済み reviewer 評価とプログラムが導出する採用可否。"""
+
+    decision: str
+    summary: str
+    issues: tuple[FoundationEvaluationIssue, ...]
+    scores: tuple[tuple[str, int], ...]
+
+    @property
+    def has_error(self) -> bool:
+        return any(issue.severity == "error" for issue in self.issues)
+
+    @property
+    def adoptable(self) -> bool:
+        return self.decision == "accept" and not self.has_error
+
+    def score(self, name: str) -> int:
+        return dict(self.scores)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluatedFoundationCandidate:
+    candidate: FoundationCandidate
+    evaluation: FoundationEvaluation
+
+
 def build_foundation_context(
     root: Path,
     request: SelectedRequest,
@@ -184,6 +225,70 @@ def foundation_generation_response_format() -> dict[str, Any]:
     return {
         "type": "json_schema",
         "json_schema": {"name": "foundation_candidate", "strict": True, "schema": schema},
+    }
+
+
+def parse_foundation_evaluation(content: str) -> FoundationEvaluation:
+    """共通評価契約と基礎設定の比較に必要な score を検証する。"""
+    value = validate_evaluation(content)
+    required_scores = {"request_fit", "concept_fit", "consistency"}
+    missing = required_scores - value["scores"].keys()
+    if missing:
+        raise _foundation_format_error(
+            f"基礎設定評価に必須 score がありません: {sorted(missing)[0]}"
+        )
+    issues = tuple(
+        FoundationEvaluationIssue(
+            item["severity"],
+            item["category"],
+            item["location"],
+            item["evidence"],
+            item["instruction"],
+        )
+        for item in value["issues"]
+    )
+    return FoundationEvaluation(
+        value["decision"], value["summary"], issues, tuple(sorted(value["scores"].items()))
+    )
+
+
+def foundation_evaluation_response_format() -> dict[str, Any]:
+    """reviewer へ渡す厳格な基礎設定評価 JSON Schema。"""
+    issue = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["severity", "category", "location", "evidence", "instruction"],
+        "properties": {
+            "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+            "category": {"type": "string"},
+            "location": {"type": "string"},
+            "evidence": {"type": "string"},
+            "instruction": {"type": "string"},
+        },
+    }
+    required_scores = ("request_fit", "concept_fit", "consistency")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["decision", "summary", "issues", "scores"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["accept", "revise", "awaiting_human"]},
+            "summary": {"type": "string"},
+            "issues": {"type": "array", "items": issue},
+            "scores": {
+                "type": "object",
+                "additionalProperties": {"type": "integer", "minimum": 1, "maximum": 5},
+                "required": list(required_scores),
+                "properties": {
+                    name: {"type": "integer", "minimum": 1, "maximum": 5}
+                    for name in required_scores
+                },
+            },
+        },
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "foundation_evaluation", "strict": True, "schema": schema},
     }
 
 
@@ -292,3 +397,12 @@ canon.md には物語開始時点で確定した事実だけを記し、将来�
 def _generation_task() -> str:
     return """採用済み構想を具体化する基礎設定4成果物を生成してください。
 各必須見出しに具体的な本文を記述し、未確定事項や初期時点で存在しない伏線は「なし」と明記してください。"""
+
+
+def _foundation_format_error(reason: str) -> StoryPipelineError:
+    return StoryPipelineError(
+        reason,
+        "LLM response",
+        "応答を修正指示付きで再生成してください",
+        7,
+    )

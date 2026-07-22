@@ -11,7 +11,9 @@ from story_pipeline.foundation import (
     FOUNDATION_HEADINGS,
     build_foundation_context,
     check_foundation_documents,
+    foundation_evaluation_response_format,
     foundation_generation_response_format,
+    parse_foundation_evaluation,
     parse_foundation_candidate,
 )
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -118,6 +120,39 @@ class FoundationPhaseTest(unittest.TestCase):
         documents["canon.md"] += "\n- 将来案: 主人公は町を去る\n"
         checked = check_foundation_documents(documents)
         self.assertIn("PROVISIONAL_CANON", {issue.code for issue in checked.issues})
+
+    def test_evaluation_requires_scores_and_error_blocks_adoption(self) -> None:
+        value = {
+            "decision": "accept",
+            "summary": "整合している",
+            "issues": [],
+            "scores": {"request_fit": 5, "concept_fit": 5, "consistency": 4},
+        }
+        evaluation = parse_foundation_evaluation(json.dumps(value, ensure_ascii=False))
+        self.assertTrue(evaluation.adoptable)
+        value["issues"] = [
+            {
+                "severity": "error",
+                "category": "cross_document_consistency",
+                "location": "world.md / characters.md",
+                "evidence": "能力が世界ルールに反する",
+                "instruction": "能力を世界ルールへ合わせる",
+            }
+        ]
+        self.assertFalse(
+            parse_foundation_evaluation(json.dumps(value, ensure_ascii=False)).adoptable
+        )
+        value["scores"] = {"request_fit": 5, "consistency": 4}
+        with self.assertRaises(Exception):
+            parse_foundation_evaluation(json.dumps(value, ensure_ascii=False))
+
+    def test_evaluation_schema_requires_foundation_scores(self) -> None:
+        schema = foundation_evaluation_response_format()["json_schema"]["schema"]
+        self.assertEqual(
+            set(schema["properties"]["scores"]["required"]),
+            {"request_fit", "concept_fit", "consistency"},
+        )
+        self.assertFalse(schema["additionalProperties"])
 
 
 if __name__ == "__main__":
