@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any
 
@@ -57,54 +56,24 @@ def main(arguments: list[str] | None = None) -> int:
     if prior_cost < 0 or prior_cost > Decimal("5.00"):
         raise RuntimeError("prior cost must be between USD 0 and USD 5.00")
     cumulative = prior_cost
-    with tempfile.TemporaryDirectory(prefix="story-pipeline-production-") as directory:
-        temporary = Path(directory)
-        command, environment = _install_wheel(temporary, wheel)
-        for index, premise in enumerate(STORIES, 1):
-            if not may_start_next_story(cumulative):
-                break
-            try:
-                story = _execute_story(
-                    temporary / f"story-{index}", command, environment, premise
-                )
-            except StoryExecutionFailure as error:
-                story = error.story
-                cost = story.cost_usd
-                results.append({
-                    "story": index,
-                    "passed": False,
-                    "failures": ["EXECUTION_FAILED"],
-                    "diagnostic": error.diagnostic,
-                    "wall_seconds": story.wall_seconds,
-                    "logical_calls": story.logical_calls,
-                    "transport_attempts": story.transport_attempts,
-                    "draft_writer_calls": story.draft_writer_calls,
-                    "cost_usd": None if cost is None else str(cost),
-                    "runs": _run_results(story),
-                })
-                if cost is not None:
-                    cumulative += cost
-                break
-            except Exception as error:
-                results.append({
-                    "story": index,
-                    "passed": False,
-                    "failures": ["HARNESS_FAILED"],
-                    "diagnostic": {"exception_class": type(error).__name__},
-                    "wall_seconds": None,
-                    "logical_calls": 0,
-                    "transport_attempts": 0,
-                    "draft_writer_calls": 0,
-                    "cost_usd": None,
-                    "runs": [],
-                })
-                break
-            failures = story_failures(story, cumulative_cost_before=cumulative)
+    temporary = output.with_name(output.stem + "-work")
+    temporary.mkdir(parents=True, exist_ok=False)
+    command, environment = _install_wheel(temporary, wheel)
+    for index, premise in enumerate(STORIES, 1):
+        if not may_start_next_story(cumulative):
+            break
+        try:
+            story = _execute_story(
+                temporary / f"story-{index}", command, environment, premise
+            )
+        except StoryExecutionFailure as error:
+            story = error.story
             cost = story.cost_usd
             results.append({
                 "story": index,
-                "passed": not failures,
-                "failures": list(failures),
+                "passed": False,
+                "failures": ["EXECUTION_FAILED"],
+                "diagnostic": error.diagnostic,
                 "wall_seconds": story.wall_seconds,
                 "logical_calls": story.logical_calls,
                 "transport_attempts": story.transport_attempts,
@@ -112,9 +81,39 @@ def main(arguments: list[str] | None = None) -> int:
                 "cost_usd": None if cost is None else str(cost),
                 "runs": _run_results(story),
             })
-            if failures or cost is None:
-                break
-            cumulative += cost
+            if cost is not None:
+                cumulative += cost
+            break
+        except Exception as error:
+            results.append({
+                "story": index,
+                "passed": False,
+                "failures": ["HARNESS_FAILED"],
+                "diagnostic": {"exception_class": type(error).__name__},
+                "wall_seconds": None,
+                "logical_calls": 0,
+                "transport_attempts": 0,
+                "draft_writer_calls": 0,
+                "cost_usd": None,
+                "runs": [],
+            })
+            break
+        failures = story_failures(story, cumulative_cost_before=cumulative)
+        cost = story.cost_usd
+        results.append({
+            "story": index,
+            "passed": not failures,
+            "failures": list(failures),
+            "wall_seconds": story.wall_seconds,
+            "logical_calls": story.logical_calls,
+            "transport_attempts": story.transport_attempts,
+            "draft_writer_calls": story.draft_writer_calls,
+            "cost_usd": None if cost is None else str(cost),
+            "runs": _run_results(story),
+        })
+        if failures or cost is None:
+            break
+        cumulative += cost
     payload = {
         "schema_version": 1,
         "started_at": started.isoformat().replace("+00:00", "Z"),
@@ -124,6 +123,7 @@ def main(arguments: list[str] | None = None) -> int:
         "passed": len(results) == len(STORIES) and all(item["passed"] for item in results),
         "prior_cost_usd": str(prior_cost),
         "total_cost_usd": str(cumulative),
+        "work_directory": str(temporary),
         "results": results,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
