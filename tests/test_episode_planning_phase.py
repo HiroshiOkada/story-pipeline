@@ -9,12 +9,17 @@ import unittest
 from story_pipeline.episode_planning import (
     DEFAULT_EPISODE_PLANNING_CONTEXT,
     EPISODE_PLAN_HEADINGS,
+    EpisodePlanCandidate,
+    EvaluatedEpisodePlanCandidate,
     build_episode_planning_context,
+    build_episode_plan_revision_messages,
     check_episode_plan_candidate,
     episode_plan_generation_response_format,
     episode_plan_evaluation_response_format,
     parse_episode_plan_candidate,
     parse_episode_plan_evaluation,
+    run_episode_plan_revision_loop,
+    select_best_episode_plan,
 )
 from story_pipeline.errors import StoryPipelineError
 from story_pipeline.request_interpretation import parse_request_interpretation
@@ -139,6 +144,52 @@ class EpisodePlanningPhaseTest(unittest.TestCase):
             {"request_fit", "chapter_fit", "continuity", "causal_consistency", "plan_completeness", "length_fit"},
         )
         self.assertFalse(schema["additionalProperties"])
+
+    def test_revision_loop_preserves_target_and_stops_on_accept(self) -> None:
+        context = build_episode_planning_context(
+            self.root, self.request, self.interpretation, 2
+        )
+        scores = {
+            "request_fit": 5, "chapter_fit": 5, "continuity": 5,
+            "causal_consistency": 5, "plan_completeness": 5, "length_fit": 5,
+        }
+        revise_evaluation = parse_episode_plan_evaluation(json.dumps(
+            {"decision": "revise", "summary": "改稿", "issues": [], "scores": scores}
+        ))
+        accepted = parse_episode_plan_evaluation(json.dumps(
+            {"decision": "accept", "summary": "採用", "issues": [], "scores": scores}
+        ))
+        initial = EvaluatedEpisodePlanCandidate(
+            EpisodePlanCandidate("episode_plans/0002.md", "初稿", 2, 1, "planner", context.input_hashes),
+            revise_evaluation,
+        )
+
+        def revise(candidate, evaluation, revision_count):
+            messages = build_episode_plan_revision_messages(context, candidate, evaluation)
+            self.assertIn("BEGIN EPISODE PLAN CANDIDATE", messages[-3]["content"])
+            return EpisodePlanCandidate(
+                candidate.path, "改稿", 2, 2, "reviser", context.input_hashes, revision_count
+            )
+
+        records = run_episode_plan_revision_loop(initial, 3, revise, lambda _: accepted)
+        self.assertEqual(len(records), 2)
+        self.assertIs(select_best_episode_plan(records), records[-1])
+
+    def test_best_episode_plan_prefers_scores_then_fewer_revisions(self) -> None:
+        scores = {
+            "request_fit": 5, "chapter_fit": 5, "continuity": 5,
+            "causal_consistency": 5, "plan_completeness": 5, "length_fit": 5,
+        }
+        evaluation = parse_episode_plan_evaluation(json.dumps(
+            {"decision": "accept", "summary": "採用", "issues": [], "scores": scores}
+        ))
+        first = EvaluatedEpisodePlanCandidate(
+            EpisodePlanCandidate("episode_plans/0002.md", "A", 2, 1, "planner", ()), evaluation
+        )
+        revised = EvaluatedEpisodePlanCandidate(
+            EpisodePlanCandidate("episode_plans/0002.md", "B", 2, 2, "reviser", (), 1), evaluation
+        )
+        self.assertIs(select_best_episode_plan([revised, first]), first)
 
 
 if __name__ == "__main__":
