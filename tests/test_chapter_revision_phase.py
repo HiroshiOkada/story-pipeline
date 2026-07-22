@@ -17,6 +17,7 @@ from story_pipeline.chapter_revision import (
     build_chapter_revision_messages,
     build_chapter_completion_update,
     build_chapter_summary_messages,
+    chapter_summary_evidence_options,
     chapter_summary_response_format,
     parse_chapter_evaluation,
     parse_chapter_revision_candidate,
@@ -191,7 +192,7 @@ class ChapterRevisionContextTest(unittest.TestCase):
         documents = tuple((path, (self.root / path).read_text(encoding="utf-8")) for path in context.episode_paths)
         accepted = EvaluatedChapterRevision(None, documents, evaluation)
         messages = build_chapter_summary_messages(context, accepted)
-        self.assertIn("BEGIN ACCEPTED CHAPTER", messages[-2]["content"])
+        self.assertIn("BEGIN ACCEPTED CHAPTER", messages[1]["content"])
         payload = json.dumps({"summary": "二つの出来事を経て関係が進展した。", "evidence": ["本文1", "本文2"]}, ensure_ascii=False)
         update = build_chapter_completion_update(
             payload, context=context, accepted=accepted,
@@ -240,9 +241,28 @@ class ChapterRevisionContextTest(unittest.TestCase):
         self.assertEqual(update.evidence, ("本文1",))
 
     def test_summary_schema_is_strict(self) -> None:
-        schema = chapter_summary_response_format()["json_schema"]["schema"]
+        schema = chapter_summary_response_format(("一意な根拠本文です。",))["json_schema"]["schema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["evidence"]["minItems"], 1)
+        self.assertEqual(
+            schema["properties"]["evidence"]["items"]["enum"], ["一意な根拠本文です。"]
+        )
+
+    def test_summary_evidence_options_exclude_headings_and_duplicates(self) -> None:
+        scores = {name: 5 for name in CHAPTER_SCORE_NAMES}
+        evaluation = parse_chapter_evaluation(json.dumps({
+            "decision": "accept", "complete": True, "reason": "完成", "summary": "採用",
+            "issues": [], "scores": scores, "human_decision": None,
+        }, ensure_ascii=False))
+        accepted = EvaluatedChapterRevision(None, (
+            ("episodes/0001.md", "# 第1話\n\n朝に固有の出来事が起きた。\n共通する長い記述です。\n"),
+            ("episodes/0002.md", "# 第2話\n\n夜に別の出来事が起きた。\n共通する長い記述です。\n"),
+        ), evaluation)
+
+        self.assertEqual(
+            chapter_summary_evidence_options(accepted),
+            ("朝に固有の出来事が起きた。", "夜に別の出来事が起きた。"),
+        )
 
 
 if __name__ == "__main__":

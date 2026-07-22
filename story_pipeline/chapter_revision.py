@@ -460,12 +460,15 @@ def build_chapter_summary_messages(
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     )
     digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
+    evidence_options = chapter_summary_evidence_options(accepted)
+    options = json.dumps(evidence_options, ensure_ascii=False, separators=(",", ":"))
     return (
         {
             "role": "system",
             "content": (
                 "あなたは Story Pipeline の章あらすじ抽出器です。採用本文で読者へ提示された事実だけを"
-                "時系列順に要約し、各要点の一意な根拠引用を返します。応答は指定 JSON object だけにします。"
+                "時系列順に要約し、各要点の根拠を提示された引用候補から選びます。"
+                "応答は指定 JSON object だけにします。"
             ),
         },
         {
@@ -475,17 +478,39 @@ def build_chapter_summary_messages(
                 f"{data}\n--- END ACCEPTED CHAPTER sha256={digest} ---"
             ),
         },
+        {"role": "user", "content": f"evidence は次の候補から選択してください: {options}"},
         {"role": "user", "content": "summary と evidence の全キーを返してください。"},
     )
 
 
-def chapter_summary_response_format() -> dict[str, Any]:
+def chapter_summary_evidence_options(
+    accepted: EvaluatedChapterRevision,
+) -> tuple[str, ...]:
+    """採用本文から一意な非見出し行を根拠候補として抽出する。"""
+    combined = "\n".join(document for _, document in accepted.documents)
+    candidates: list[str] = []
+    for _, document in accepted.documents:
+        for line in document.splitlines():
+            candidate = line.strip()
+            if not candidate or candidate.startswith("#"):
+                continue
+            if combined.count(candidate) == 1:
+                candidates.append(candidate)
+    return tuple(dict.fromkeys(candidates))
+
+
+def chapter_summary_response_format(
+    evidence_options: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    evidence_item: dict[str, Any] = {"type": "string", "minLength": 1}
+    if evidence_options:
+        evidence_item["enum"] = list(evidence_options)
     schema = {
         "type": "object", "additionalProperties": False,
         "required": ["summary", "evidence"],
         "properties": {
             "summary": {"type": "string", "minLength": 1},
-            "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "evidence": {"type": "array", "minItems": 1, "items": evidence_item},
         },
     }
     return {"type": "json_schema", "json_schema": {"name": "chapter_summary", "strict": True, "schema": schema}}
