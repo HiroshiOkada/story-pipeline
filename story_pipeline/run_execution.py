@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import difflib
 from pathlib import Path
 from typing import Any
+import uuid
 
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.interruptions import TerminationSignal
 from story_pipeline.draft_checkpoint import (
     inspect_checkpoint_adoption,
     load_draft_checkpoint,
@@ -22,7 +24,10 @@ from story_pipeline.run_lifecycle import (
     finalize_run_record,
     finish_step,
     record_model_attempt,
+    record_event,
+    record_incident,
     start_step,
+    transition_lifecycle,
     utc_timestamp,
 )
 from story_pipeline.run_start import RunStart
@@ -117,6 +122,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         run = _finish(start, run, current, "completed", result=f"status={status}")
         run, current = _begin(start, run, "write_report")
         run = _finish(start, run, current, "completed", result="終了処理で報告を保存")
+        run = transition_lifecycle(run, "finalizing")
         run = finalize_run_record(
             run,
             status,
@@ -137,26 +143,49 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         return RunExecutionResult(
             run, state, planned, workflow, changed, workflow.reason, 8 if status == "awaiting_human" else 7 if status == "failed" else 0
         )
-    except (StoryPipelineError, ApiFailure, Exception) as error:
-        if isinstance(error, StoryPipelineError):
+    except BaseException as error:
+        run = _record_client_events(start, run, current)
+        if isinstance(error, (KeyboardInterrupt, TerminationSignal)):
+            code = 143 if isinstance(error, TerminationSignal) else 130
+            message = "実行が割り込まれました"
+            component = "interruption"
+        elif isinstance(error, StoryPipelineError):
             code = error.exit_code
             message = error.reason
+            component = "workflow" if current == "generate" else "execution"
         elif isinstance(error, ApiFailure):
             code = 8 if error.awaiting_human else 7
             message = error.message
+            component = "transport"
         else:
             code = 9
             message = "予期しない内部エラーが発生しました"
+            component = "finalizing" if run.get("status") != "running" else (
+                "workflow"
+            )
         status = "awaiting_human" if code == 8 else "failed"
-        run = _close_running_step(run, current, "failed", message)
-        run = finalize_run_record(
+        run = record_incident(
             run,
-            status,
-            resume_step=current if status == "failed" else None,
-            resume_reason=message if status == "failed" else None,
-            error={"step": current, "category": "execution", "message": message, "retryable": status == "failed"},
+            incident_id=f"inc-{uuid.uuid4().hex}",
+            component=component,
+            exception_class=type(error).__name__,
+            step=current,
+            retryable=code in {7, 9},
         )
-        state = persist_finished_execution(start.root, start.state, run)
+        if run.get("status") == "running":
+            run = _close_running_step(run, current, "failed", message)
+            run = transition_lifecycle(run, "finalizing")
+            run = finalize_run_record(
+                run,
+                status,
+                resume_step=current if status == "failed" else None,
+                resume_reason=message if status == "failed" else None,
+                error={"step": current, "category": component, "message": message, "retryable": status == "failed"},
+            )
+            state = persist_finished_execution(start.root, start.state, run)
+        else:
+            persist_run_progress(start.root, run)
+            state = start.state
         return RunExecutionResult(run, state, planned, workflow, (), message, code)
 
 
@@ -177,6 +206,7 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
     normalized = "summary" if category == "summary" else category
     if normalized not in {"generation", "review", "revision", "knowledge"}:
         normalized = "generation"
+    run = _record_client_events(start, run, run["current_step"])
     timestamp = utc_timestamp()
     model = start.config["models"][completion.model_reference]["model"]
     fallbacks = tuple(
@@ -194,8 +224,54 @@ def _record_completion(start: RunStart, run: dict[str, Any], category: str, role
         result="completed",
         attempts=completion.attempts,
         fallbacks=fallbacks,
+        transport_attempts=tuple({
+            "model_reference": item.model_reference,
+            "api_model": item.api_model,
+            "attempt": item.attempt,
+            "maximum_attempts": item.maximum_attempts,
+            "started_at": item.started_at,
+            "finished_at": item.finished_at,
+            "elapsed_ms": item.elapsed_ms,
+            "result": item.result,
+            "failure_kind": item.failure_kind,
+            "wait_ms": item.wait_ms,
+        } for item in completion.transport_attempts),
+        usage=(
+            {
+                "prompt_tokens": completion.response.usage.prompt_tokens,
+                "completion_tokens": completion.response.usage.completion_tokens,
+                "total_tokens": completion.response.usage.total_tokens,
+                "cached_tokens": completion.response.usage.cached_tokens,
+                "reasoning_tokens": completion.response.usage.reasoning_tokens,
+            }
+            if completion.response.usage is not None else None
+        ),
+        truncated=any(
+            item.failure_kind == "output_truncated"
+            for item in completion.transport_attempts
+        ),
     )
     persist_run_progress(start.root, updated)
+    return updated
+
+
+def _record_client_events(
+    start: RunStart, run: dict[str, Any], step: str
+) -> dict[str, Any]:
+    drain = getattr(start.client, "drain_events", None)
+    if drain is None:
+        return run
+    updated = run
+    for event in drain():
+        updated = record_event(
+            updated,
+            kind=event["kind"],
+            step=step,
+            details=event["details"],
+            now=event["occurred_at"],
+        )
+    if updated is not run:
+        persist_run_progress(start.root, updated)
     return updated
 
 

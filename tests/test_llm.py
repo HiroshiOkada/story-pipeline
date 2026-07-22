@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from urllib.error import HTTPError
 
@@ -15,7 +17,7 @@ from story_pipeline.errors import StoryPipelineError
 from story_pipeline.llm_client import LLMClient
 from story_pipeline.llm_connection import check_initial_connections
 from story_pipeline.llm_output import FieldRule, parse_json_object, validate_evaluation, validate_markdown
-from story_pipeline.llm_transport import ApiFailure, ChatResponse, ChatTransport
+from story_pipeline.llm_transport import ApiFailure, ChatResponse, ChatTransport, TokenUsage
 from story_pipeline.secrets import REDACTED, SecretSanitizer
 
 
@@ -175,6 +177,113 @@ class LLMClientTest(unittest.TestCase):
         self.assertEqual(result.attempts, 3)
         self.assertEqual(len(result.fallbacks), 1)
         self.assertEqual(sleeps, [0.5])
+
+    def test_transport_attempts_measure_retry_wait_and_missing_usage(self) -> None:
+        class FakeClock:
+            def __init__(self) -> None:
+                self.seconds = 0.0
+
+            def monotonic(self) -> float:
+                value = self.seconds
+                self.seconds += 0.125
+                return value
+
+            def now(self) -> datetime:
+                return datetime(2026, 7, 22, tzinfo=timezone.utc) + timedelta(seconds=self.seconds)
+
+            def sleep(self, seconds: float) -> None:
+                self.seconds += seconds
+
+        clock = FakeClock()
+        transport = SequenceTransport([
+            ApiFailure("temporary", "retry"),
+            ChatResponse("done", "a", "stop"),
+        ])
+        client = LLMClient(
+            self.config(),
+            {"KEY": "secret"},
+            transport=transport,
+            sleep=clock.sleep,
+            random_factor=lambda: 0,
+            monotonic=clock.monotonic,
+            utc_now=clock.now,
+        )
+
+        result = client.complete_role("writer", [])
+
+        self.assertIsNone(result.response.usage)
+        self.assertEqual(len(result.transport_attempts), 2)
+        self.assertEqual(result.transport_attempts[0].elapsed_ms, 125)
+        self.assertEqual(result.transport_attempts[0].wait_ms, 500)
+        self.assertEqual(result.transport_attempts[0].failure_kind, "temporary")
+        self.assertEqual(result.transport_attempts[1].elapsed_ms, 125)
+        self.assertEqual(result.transport_attempts[1].result, "completed")
+
+    def test_long_transport_emits_secret_free_heartbeat(self) -> None:
+        class SlowTransport:
+            def complete(self, **_: object) -> ChatResponse:
+                time.sleep(0.035)
+                return ChatResponse("done", "a", "stop")
+
+        events: list[dict[str, object]] = []
+        client = LLMClient(
+            self.config(),
+            {"KEY": "top-secret"},
+            transport=SlowTransport(),
+            event_sink=events.append,
+            heartbeat_interval_seconds=0.01,
+        )
+
+        client.complete_role("writer", [{"role": "user", "content": "top-secret"}])
+
+        heartbeats = [item for item in events if item["kind"] == "heartbeat"]
+        self.assertGreaterEqual(len(heartbeats), 3)
+        self.assertNotIn("top-secret", json.dumps(events))
+        self.assertEqual(tuple(events), client.drain_events())
+        self.assertEqual(client.drain_events(), ())
+
+    def test_fake_transport_exact_retry_fallback_truncation_and_usage(self) -> None:
+        class Clock:
+            def __init__(self) -> None:
+                self.value = 0.0
+
+            def monotonic(self) -> float:
+                current = self.value
+                self.value += 0.1
+                return current
+
+            def now(self) -> datetime:
+                return datetime(2026, 7, 22, tzinfo=timezone.utc) + timedelta(seconds=self.value)
+
+            def sleep(self, seconds: float) -> None:
+                self.value += seconds
+
+        clock = Clock()
+        transport = SequenceTransport([
+            ApiFailure("temporary", "retry"),
+            ApiFailure("output_truncated", "truncated"),
+            ChatResponse(
+                "done", "b", "stop",
+                TokenUsage(11, 7, 18, None, 2),
+            ),
+        ])
+        client = LLMClient(
+            self.config(), {"KEY": "secret"}, transport=transport,
+            sleep=clock.sleep, random_factor=lambda: 0,
+            monotonic=clock.monotonic, utc_now=clock.now,
+        )
+
+        result = client.complete_role("writer", [])
+
+        self.assertEqual(result.attempts, 3)
+        self.assertEqual([item.wait_ms for item in result.transport_attempts], [500, 0, 0])
+        self.assertEqual(
+            [item.failure_kind for item in result.transport_attempts],
+            ["temporary", "output_truncated", None],
+        )
+        self.assertEqual(result.fallbacks[0].reason, "output_truncated")
+        self.assertEqual(result.response.usage.total_tokens, 18)
+        self.assertEqual(len([event for event in client.drain_events() if event["kind"] == "fallback"]), 1)
 
     def test_unsupported_config_parameter_is_removed_once(self) -> None:
         transport = SequenceTransport(

@@ -10,6 +10,7 @@ from typing import Any, Literal
 RunStatus = Literal["completed", "failed", "awaiting_human"]
 StepStatus = Literal["completed", "failed", "skipped"]
 CALL_CATEGORIES = {"generation", "review", "revision", "knowledge", "summary"}
+LIFECYCLE_STATES = {"starting", "executing", "finalizing", "committed"}
 
 
 def utc_timestamp() -> str:
@@ -32,7 +33,7 @@ def create_run_record(
     _require_commit(start_commit)
     timestamp = now or utc_timestamp()
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "request_number": request_number,
         "status": "running",
         "started_at": timestamp,
@@ -66,6 +67,17 @@ def create_run_record(
             }
         ],
         "resume_count": 0,
+        "model_calls": [],
+        "events": [],
+        "incidents": [],
+        "lifecycle": {
+            "state": "executing",
+            "history": [
+                {"state": "starting", "occurred_at": timestamp},
+                {"state": "executing", "occurred_at": timestamp},
+            ],
+        },
+        "metrics": _empty_metrics(),
     }
 
 
@@ -85,7 +97,6 @@ def resume_run_record(
     updated = deepcopy(run)
     updated["call_counts"].setdefault("knowledge", 0)
     if updated.get("schema_version") == 1:
-        updated["schema_version"] = 2
         updated["request_revisions"] = [{
             "sha256": updated["request_sha256"],
             "input_commit": updated["start_commit"],
@@ -93,6 +104,16 @@ def resume_run_record(
             "applies_from_step": "interpret_request",
         }]
         updated["resume_count"] = 0
+    if updated.get("schema_version", 1) < 3:
+        updated["schema_version"] = 3
+        updated["model_calls"] = []
+        updated["events"] = []
+        updated["incidents"] = []
+        updated["lifecycle"] = {
+            "state": "executing",
+            "history": [{"state": "executing", "occurred_at": now or utc_timestamp()}],
+        }
+        updated["metrics"] = _empty_metrics()
     timestamp = now or utc_timestamp()
     if request_sha256 is not None and request_sha256 != updated["request_sha256"]:
         _require_hash(request_sha256)
@@ -114,6 +135,8 @@ def resume_run_record(
     updated["current_step"] = step
     updated["resume"] = {"step": step, "reason": reason}
     updated["resume_count"] += 1
+    updated["lifecycle"]["state"] = "executing"
+    updated["lifecycle"]["history"].append({"state": "executing", "occurred_at": timestamp})
     return updated
 
 
@@ -191,6 +214,9 @@ def record_model_attempt(
     attempts: int = 1,
     token_count: int | None = None,
     fallbacks: tuple[dict[str, str], ...] = (),
+    transport_attempts: tuple[dict[str, Any], ...] = (),
+    usage: dict[str, int | None] | None = None,
+    truncated: bool = False,
 ) -> dict[str, Any]:
     """秘密や応答本文を含めず、論理 LLM 呼び出しを累積記録する。"""
     if category not in CALL_CATEGORIES:
@@ -214,7 +240,99 @@ def record_model_attempt(
         }
     )
     updated["fallbacks"].extend(deepcopy(list(fallbacks)))
+    elapsed_ms = sum(item["elapsed_ms"] for item in transport_attempts)
+    updated["model_calls"].append(
+        {
+            "category": category,
+            "role": role,
+            "model_reference": model_reference,
+            "api_model": api_model,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "elapsed_ms": elapsed_ms,
+            "result": result,
+            "transport_attempts": deepcopy(list(transport_attempts)),
+            "usage": deepcopy(usage),
+            "fallback_count": len(fallbacks),
+            "truncated": truncated,
+            "request_revision": len(updated["request_revisions"]) - 1,
+            "resume_count": updated["resume_count"],
+        }
+    )
+    updated["metrics"] = _calculate_metrics(updated["model_calls"])
     updated["updated_at"] = finished_at
+    return updated
+
+
+def record_event(
+    run: dict[str, Any],
+    *,
+    kind: str,
+    step: str,
+    details: dict[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """秘密値や本文を含めない構造化進捗イベントを追記する。"""
+    _require_running(run)
+    if not kind or not step:
+        raise ValueError("event には kind と step が必要です")
+    updated = deepcopy(run)
+    timestamp = now or utc_timestamp()
+    updated["events"].append({
+        "kind": kind,
+        "step": step,
+        "occurred_at": timestamp,
+        "details": deepcopy(details or {}),
+    })
+    updated["updated_at"] = timestamp
+    return updated
+
+
+def transition_lifecycle(
+    run: dict[str, Any], state: str, *, now: str | None = None
+) -> dict[str, Any]:
+    """run 終了境界の lifecycle を単調に進める。"""
+    if state not in LIFECYCLE_STATES:
+        raise ValueError("lifecycle state が不正です")
+    order = ("starting", "executing", "finalizing", "committed")
+    current = run["lifecycle"]["state"]
+    if order.index(state) < order.index(current):
+        raise ValueError("lifecycle を逆行できません")
+    if state == current:
+        return deepcopy(run)
+    updated = deepcopy(run)
+    timestamp = now or utc_timestamp()
+    updated["lifecycle"]["state"] = state
+    updated["lifecycle"]["history"].append({"state": state, "occurred_at": timestamp})
+    updated["updated_at"] = timestamp
+    return updated
+
+
+def record_incident(
+    run: dict[str, Any],
+    *,
+    incident_id: str,
+    component: str,
+    exception_class: str,
+    step: str,
+    retryable: bool,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """例外 message や traceback を保存せず障害識別情報を追記する。"""
+    if not incident_id or not component or not exception_class or not step:
+        raise ValueError("incident の必須値が不足しています")
+    updated = deepcopy(run)
+    timestamp = now or utc_timestamp()
+    updated["incidents"].append({
+        "incident_id": incident_id,
+        "component": component,
+        "exception_class": exception_class,
+        "step": step,
+        "lifecycle": updated["lifecycle"]["state"],
+        "retryable": retryable,
+        "occurred_at": timestamp,
+    })
+    updated["updated_at"] = timestamp
     return updated
 
 
@@ -256,6 +374,36 @@ def finalize_run_record(
 def _require_running(run: dict[str, Any]) -> None:
     if run.get("status") != "running":
         raise ValueError("running の実行記録が必要です")
+
+
+def _empty_metrics() -> dict[str, Any]:
+    return {
+        "logical_calls": 0,
+        "transport_attempts": 0,
+        "retry_wait_ms": 0,
+        "elapsed_ms": 0,
+        "usage": {
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "cached_tokens": None,
+            "reasoning_tokens": None,
+        },
+    }
+
+
+def _calculate_metrics(calls: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = _empty_metrics()
+    metrics["logical_calls"] = len(calls)
+    metrics["transport_attempts"] = sum(len(item["transport_attempts"]) for item in calls)
+    metrics["retry_wait_ms"] = sum(
+        attempt["wait_ms"] for item in calls for attempt in item["transport_attempts"]
+    )
+    metrics["elapsed_ms"] = sum(item["elapsed_ms"] for item in calls)
+    for key in metrics["usage"]:
+        values = [item["usage"][key] for item in calls if item["usage"] is not None and item["usage"][key] is not None]
+        metrics["usage"][key] = sum(values) if values else None
+    return metrics
 
 
 def _require_hashes(hashes: dict[str, str]) -> None:

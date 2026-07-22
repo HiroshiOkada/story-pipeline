@@ -24,6 +24,7 @@ RUN_KEYS_V1 = {
     "restored_files", "fallbacks", "errors", "resume",
 }
 RUN_KEYS_V2 = RUN_KEYS_V1 | {"request_revisions", "resume_count"}
+RUN_KEYS_V3 = RUN_KEYS_V2 | {"model_calls", "events", "incidents", "lifecycle", "metrics"}
 
 
 class RunFormatError(ValueError):
@@ -88,8 +89,11 @@ def validate_run_data(
         run = _migrate_v1(run)
     elif version == 2:
         _keys(run, RUN_KEYS_V2, location)
+        run = _migrate_v2(run)
+    elif version == 3:
+        _keys(run, RUN_KEYS_V3, location)
     else:
-        _fail("schema_version は 1 または 2 である必要があります", f"{location}#/schema_version")
+        _fail("schema_version は 1、2、3 のいずれかである必要があります", f"{location}#/schema_version")
     number = _bounded_integer(run["request_number"], f"{location}#/request_number", 0, 9999)
     if number != filename_number:
         _fail("request_number がファイル名と一致しません", f"{location}#/request_number")
@@ -128,11 +132,12 @@ def validate_run_data(
     _validate_resume(run["resume"], location)
     _bounded_integer(run["resume_count"], f"{location}#/resume_count", 0, 2**63 - 1)
     _validate_request_revisions(run, location)
+    _validate_observability(run, location)
     return run
 
 
 def _migrate_v1(run: dict[str, Any]) -> dict[str, Any]:
-    """v1 の初回入力境界を失わず、メモリ上の v2 表現へ補完する。"""
+    """v1 の初回入力境界を失わず v3 へ補完する。"""
     migrated = dict(run)
     migrated["schema_version"] = 2
     migrated["resume_count"] = 0
@@ -144,7 +149,126 @@ def _migrate_v1(run: dict[str, Any]) -> dict[str, Any]:
             "applies_from_step": "interpret_request",
         }
     ]
+    return _migrate_v2(migrated)
+
+
+def _migrate_v2(run: dict[str, Any]) -> dict[str, Any]:
+    """v2 の記録を観測値未取得の v3 として読み込む。"""
+    migrated = dict(run)
+    migrated["schema_version"] = 3
+    migrated["model_calls"] = []
+    migrated["events"] = []
+    migrated["incidents"] = []
+    state = "finalizing" if run["status"] != "running" else "executing"
+    migrated["lifecycle"] = {
+        "state": state,
+        "history": [{"state": state, "occurred_at": run["updated_at"]}],
+    }
+    migrated["metrics"] = _empty_metrics()
     return migrated
+
+
+def _empty_metrics() -> dict[str, Any]:
+    return {
+        "logical_calls": 0,
+        "transport_attempts": 0,
+        "retry_wait_ms": 0,
+        "elapsed_ms": 0,
+        "usage": {key: None for key in (
+            "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"
+        )},
+    }
+
+
+def _validate_observability(run: dict[str, Any], location: str) -> None:
+    calls = _array(run["model_calls"], f"{location}#/model_calls")
+    for index, value in enumerate(calls):
+        item_location = f"{location}#/model_calls/{index}"
+        item = _object(value, item_location)
+        _keys(item, {
+            "category", "role", "model_reference", "api_model", "started_at", "finished_at",
+            "elapsed_ms", "result", "transport_attempts", "usage", "fallback_count", "truncated",
+            "request_revision", "resume_count",
+        }, item_location)
+        for key in ("category", "role", "model_reference", "api_model", "result"):
+            _string(item[key], f"{item_location}/{key}")
+        _timestamp(item["started_at"], f"{item_location}/started_at")
+        _timestamp(item["finished_at"], f"{item_location}/finished_at")
+        for key in ("elapsed_ms", "fallback_count", "request_revision", "resume_count"):
+            _bounded_integer(item[key], f"{item_location}/{key}", 0, 2**63 - 1)
+        if not isinstance(item["truncated"], bool):
+            _fail("boolean である必要があります", f"{item_location}/truncated")
+        _validate_usage(item["usage"], f"{item_location}/usage")
+        for attempt_index, attempt_value in enumerate(_array(item["transport_attempts"], f"{item_location}/transport_attempts")):
+            _validate_transport_attempt(attempt_value, f"{item_location}/transport_attempts/{attempt_index}")
+    for index, value in enumerate(_array(run["events"], f"{location}#/events")):
+        item_location = f"{location}#/events/{index}"
+        item = _object(value, item_location)
+        _keys(item, {"kind", "step", "occurred_at", "details"}, item_location)
+        _string(item["kind"], f"{item_location}/kind")
+        _string(item["step"], f"{item_location}/step")
+        _timestamp(item["occurred_at"], f"{item_location}/occurred_at")
+        _object(item["details"], f"{item_location}/details")
+    for index, value in enumerate(_array(run["incidents"], f"{location}#/incidents")):
+        item_location = f"{location}#/incidents/{index}"
+        item = _object(value, item_location)
+        _keys(item, {"incident_id", "component", "exception_class", "step", "lifecycle", "retryable", "occurred_at"}, item_location)
+        for key in ("incident_id", "component", "exception_class", "step", "lifecycle"):
+            _string(item[key], f"{item_location}/{key}")
+        if not isinstance(item["retryable"], bool):
+            _fail("boolean である必要があります", f"{item_location}/retryable")
+        _timestamp(item["occurred_at"], f"{item_location}/occurred_at")
+    lifecycle = _object(run["lifecycle"], f"{location}#/lifecycle")
+    _keys(lifecycle, {"state", "history"}, f"{location}#/lifecycle")
+    _enum(lifecycle["state"], {"starting", "executing", "finalizing", "committed"}, f"{location}#/lifecycle/state")
+    for index, value in enumerate(_array(lifecycle["history"], f"{location}#/lifecycle/history")):
+        item = _object(value, f"{location}#/lifecycle/history/{index}")
+        _keys(item, {"state", "occurred_at"}, f"{location}#/lifecycle/history/{index}")
+        _enum(item["state"], {"starting", "executing", "finalizing", "committed"}, f"{location}#/lifecycle/history/{index}/state")
+        _timestamp(item["occurred_at"], f"{location}#/lifecycle/history/{index}/occurred_at")
+    metrics = _object(run["metrics"], f"{location}#/metrics")
+    _keys(metrics, {"logical_calls", "transport_attempts", "retry_wait_ms", "elapsed_ms", "usage"}, f"{location}#/metrics")
+    expected = {
+        "logical_calls": len(calls),
+        "transport_attempts": sum(len(item["transport_attempts"]) for item in calls),
+        "retry_wait_ms": sum(attempt["wait_ms"] for item in calls for attempt in item["transport_attempts"]),
+        "elapsed_ms": sum(item["elapsed_ms"] for item in calls),
+    }
+    for key, value in expected.items():
+        if _bounded_integer(metrics[key], f"{location}#/metrics/{key}", 0, 2**63 - 1) != value:
+            _fail("詳細記録と集計値が一致しません", f"{location}#/metrics/{key}")
+    _validate_usage(metrics["usage"], f"{location}#/metrics/usage")
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"):
+        values = [item["usage"][key] for item in calls if item["usage"] is not None and item["usage"][key] is not None]
+        expected_usage = sum(values) if values else None
+        if metrics["usage"][key] != expected_usage:
+            _fail("詳細記録と usage 集計が一致しません", f"{location}#/metrics/usage/{key}")
+
+
+def _validate_transport_attempt(value: Any, location: str) -> None:
+    item = _object(value, location)
+    _keys(item, {"model_reference", "api_model", "attempt", "maximum_attempts", "started_at", "finished_at", "elapsed_ms", "result", "failure_kind", "wait_ms"}, location)
+    for key in ("model_reference", "api_model", "result"):
+        _string(item[key], f"{location}/{key}")
+    for key in ("attempt", "maximum_attempts"):
+        _bounded_integer(item[key], f"{location}/{key}", 1, 2**63 - 1)
+    for key in ("elapsed_ms", "wait_ms"):
+        _bounded_integer(item[key], f"{location}/{key}", 0, 2**63 - 1)
+    _timestamp(item["started_at"], f"{location}/started_at")
+    _timestamp(item["finished_at"], f"{location}/finished_at")
+    if item["failure_kind"] is not None:
+        _string(item["failure_kind"], f"{location}/failure_kind")
+
+
+def _validate_usage(value: Any, location: str) -> None:
+    if value is None:
+        return
+    usage = _object(value, location)
+    keys = {"prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"}
+    _keys(usage, keys, location)
+    for key in keys:
+        if usage[key] is not None:
+            _bounded_integer(usage[key], f"{location}/{key}", 0, 2**63 - 1)
 
 
 def _validate_request_revisions(run: dict[str, Any], location: str) -> None:

@@ -85,7 +85,7 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "request_number": 0,
   "status": "running",
   "started_at": "2026-07-22T01:23:45Z",
@@ -118,13 +118,33 @@ scaffold 時は `phase=concept`、次番号はともに `1`、配列は空、req
       "applies_from_step": "interpret_request"
     }
   ],
-  "resume_count": 0
+  "resume_count": 0,
+  "model_calls": [],
+  "events": [],
+  "incidents": [],
+  "lifecycle": {
+    "state": "executing",
+    "history": []
+  },
+  "metrics": {
+    "logical_calls": 0,
+    "transport_attempts": 0,
+    "retry_wait_ms": 0,
+    "elapsed_ms": 0,
+    "usage": {
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "cached_tokens": null,
+      "reasoning_tokens": null
+    }
+  }
 }
 ```
 
 `request_sha256`、`input_hashes`、`output_hashes` はファイルの生バイト列に対する小文字 64 桁の SHA-256 とする。Git コミットは完全な object ID を保存する。`request_sha256` は現在受け入れている要求を表し、`request_revisions` は初回から最新版までの hash、入力 commit、受入時刻、再実行を始める工程を順に保存する。`start_commit` と `started_at` は初回値から変更しない。`resume_count` はプロセス単位の再開ごとに増やす。
 
-version 1 の run は、`request_sha256`、`start_commit`、`started_at` から初回 revision を補い、`resume_count=0` の version 2 として読み込む。次に run を永続化すると version 2 へ移行する。
+version 1 の run は初回 revision を補い、version 2 は観測値を未取得として、どちらも version 3 へ互換読み込みする。旧記録の token や所要時間を 0 や推測値で補完しない。
 
 ### 3.2 本文 checkpoint
 
@@ -163,7 +183,11 @@ knowledge=completed, adoption=adopted
 
 ### 3.4 モデル試行とエラー
 
-`model_attempts` は論理呼び出しごとに role、purpose（generation、review、revision、knowledge、summary）、モデル定義名、API 上のモデル名、開始・終了日時、結果分類、消費トークン数が取得できた場合の値、および適用された要求 revision の 0 始まり番号を記録する。プロンプト、応答全文、API キー、認証ヘッダーは記録しない。
+`model_attempts` は後方互換用の論理呼び出し集計とする。version 3 の `model_calls` は各論理呼び出しに role、purpose、モデル、要求 revision、resume count、開始・終了日時、所要時間、fallback、truncation、usage を関連付ける。`transport_attempts` は各 HTTP 試行の試行番号と上限、所要時間、失敗分類、実待機時間を保存する。`metrics` は詳細値から再計算し、読み込み時に一致を検証する。
+
+provider が usage を返した場合だけ prompt、completion、total、cached、reasoning token を保存する。提供されない値は `null` のままとし、0 と区別する。プロンプト、応答全文、API キー、認証ヘッダー、完全 URL は記録しない。
+
+`lifecycle` は `starting`、`executing`、`finalizing`、`committed` の履歴を持つ。予期しない例外は例外本文や traceback を保存せず、`incidents` に UUID 形式の ID、component、例外クラス、現在工程、lifecycle、再試行可否だけを保存する。workflow、transport、finalizing、Git、lock、SIGINT/SIGTERM は別 component または例外クラスで識別する。
 
 エラー要素は次の形式とする。
 

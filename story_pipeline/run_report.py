@@ -130,8 +130,38 @@ def _evaluation_lines(run: dict[str, Any], context: ReportContext) -> list[str]:
         "- 使用モデル: "
         + (", ".join(f"{_inline(role)}={_inline(model)}" for role, model in models) if models else "なし")
     )
+    metrics = run.get("metrics")
+    if isinstance(metrics, dict):
+        lines.extend(_performance_lines(run, metrics))
     lines.append(f"- 採用理由: {_inline(context.adoption_reason or 'なし')}")
     lines.extend(_bullet_group("残る注意", context.cautions))
+    return lines
+
+
+def _performance_lines(run: dict[str, Any], metrics: dict[str, Any]) -> list[str]:
+    usage = metrics["usage"]
+    usage_text = ", ".join(
+        f"{name}={usage[name] if usage[name] is not None else 'unknown'}"
+        for name in (
+            "prompt_tokens", "completion_tokens", "total_tokens",
+            "cached_tokens", "reasoning_tokens",
+        )
+    )
+    fallbacks = sum(item.get("fallback_count", 0) for item in run.get("model_calls", ()))
+    truncations = sum(bool(item.get("truncated")) for item in run.get("model_calls", ()))
+    lines = [
+        "- 通信計測: "
+        f"logical={metrics['logical_calls']}, transport={metrics['transport_attempts']}, "
+        f"retry_wait_ms={metrics['retry_wait_ms']}, elapsed_ms={metrics['elapsed_ms']}, "
+        f"fallbacks={fallbacks}, truncations={truncations}",
+        f"- Token usage: {usage_text}",
+    ]
+    if run.get("resume_count", 0) > 0:
+        regenerated = sum(
+            item.get("category") == "knowledge" and item.get("resume_count", 0) > 0
+            for item in run.get("model_calls", ())
+        )
+        lines.append(f"- 再開後 knowledge 再生成: {regenerated}")
     return lines
 
 
