@@ -258,4 +258,3 @@ def _result(
         status, context, candidates, best, completion_update, tuple(calls),
         tuple(sorted(counts.items())), reason,
     )
-
