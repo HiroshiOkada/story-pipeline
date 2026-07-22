@@ -32,13 +32,16 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
     report: str | None = None
     next_request: str | None = None
     code = 9
+    termination = capture_sigterm()
+    termination.__enter__()
     try:
-        with capture_sigterm():
-            result = execute_started_run(start)
+        result = execute_started_run(start)
         try:
             report = _write_report(start.root, result)
         except BaseException as error:
-            result = _finalization_failure(start.root, result, error, "finalizing", "write_report")
+            result = _finalization_failure(
+                start.root, result, error, _incident_component(error, "finalizing"), "write_report"
+            )
             _print_incident(result, error_output)
             return _interruption_code(error) or 9
         managed = tuple(dict.fromkeys((
@@ -61,13 +64,17 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
                 body=(f"Phase: {result.workflow.phase if result.workflow else 'unknown'}",),
             )
         except BaseException as error:
-            result = _finalization_failure(start.root, result, error, "git", "commit_outputs")
+            result = _finalization_failure(
+                start.root, result, error, _incident_component(error, "git"), "commit_outputs"
+            )
             _print_incident(result, error_output)
             return _interruption_code(error) or 9
         try:
             next_request = _next_request(start.root, start.request.number)
         except BaseException as error:
-            result = _finalization_failure(start.root, result, error, "finalizing", "next_request")
+            result = _finalization_failure(
+                start.root, result, error, _incident_component(error, "finalizing"), "next_request"
+            )
             _print_incident(result, error_output)
             return _interruption_code(error) or 9
         _print_result(result, report, next_request, output, error_output)
@@ -77,9 +84,13 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
             start.lock.release()
         except BaseException as error:
             if result is not None:
-                result = _finalization_failure(start.root, result, error, "lock", "release_lock")
+                result = _finalization_failure(
+                    start.root, result, error, _incident_component(error, "lock"), "release_lock"
+                )
                 _print_incident(result, error_output)
             code = _interruption_code(error) or 9
+        finally:
+            termination.__exit__(None, None, None)
     return code
 
 
@@ -119,6 +130,10 @@ def _interruption_code(error: BaseException) -> int | None:
     if isinstance(error, TerminationSignal):
         return 143
     return None
+
+
+def _incident_component(error: BaseException, default: str) -> str:
+    return "interruption" if _interruption_code(error) is not None else default
 
 
 def _write_report(root: Path, result: RunExecutionResult) -> str:
