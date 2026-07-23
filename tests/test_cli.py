@@ -77,6 +77,12 @@ class CliTest(unittest.TestCase):
             state = json.loads((root / ".story-pipeline" / "state.json").read_text())
             self.assertEqual(state["schema_version"], 1)
             self.assertEqual(state["phase"], "concept")
+            config = json.loads((root / "story-pipeline-config.jsonc").read_text())
+            self.assertEqual(config["models"]["default"]["model"], "gpt-5.6-luna")
+            self.assertEqual(
+                config["models"]["default"]["parameters"]["reasoning_effort"],
+                "none",
+            )
             self.assertEqual(self.git(root, "status", "--short"), "")
             self.assertEqual(
                 set(self.git(root, "show", "--format=", "--name-only", "HEAD").splitlines()),

@@ -67,7 +67,10 @@ class ConfigTest(unittest.TestCase):
             create_scaffold(root)
             config = load_config(root)
             self.assertEqual(config["models"]["default"]["max_tokens"], 131072)
-            self.assertEqual(config["models"]["default"]["parameters"], {})
+            self.assertEqual(
+                config["models"]["default"]["parameters"],
+                {"reasoning_effort": "none"},
+            )
             self.assertEqual(config["dotenv"]["files"][1], str(root / ".env"))
             self.assertEqual(
                 config["providers"]["openai"]["base_url"],
