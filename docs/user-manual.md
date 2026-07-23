@@ -454,13 +454,23 @@ API を呼び出さず、次を可能な範囲でまとめて検査します。
 
 処理開始時に人間が編集した要求・設定・明示的な追加資料を `Record request NNNN input` として commit し、終了時に管理成果物を `Complete request NNNN: <status>` として commit します。未処理要求がなければ `No pending request.` と表示して正常終了します。
 
-### 9.6 `migrate-state`
+### 9.6 `check-llm`
+
+```console
+story-pipeline check-llm
+```
+
+設定の role から参照される全モデルについて、通常の Chat Completion と strict JSON Schema による構造化 JSON 応答を実際に生成できるか検査します。`PASS` が両方表示されたモデルは、Story Pipeline が最低限必要とする応答機能を利用できます。`FAIL` の場合は表示された失敗分類を確認してください。
+
+このコマンドは作品、状態、実行記録、Git、ロックを変更しません。ただし実際の API 呼び出しをモデルごとに2回以上行うため、利用量と料金が発生する場合があります。API キーや完全な応答は表示しません。
+
+### 9.7 `migrate-state`
 
 旧版で、章内最終話の完成後も誤った制作フェーズを指す状態を、章・話対応表と既存本文から再計算します。作品本文、要求、run、既存 commit は変更しません。通常は使わず、更新案内または検証結果が必要性を示した場合だけ実行してください。
 
 実行前に active request がなく、ロックがなく、Git が通常状態で、章・話番号と完成済み本文が連続している必要があります。状態が既に正しければ何も変更しません。変更時は `Migrate story state` commit が作られます。
 
-### 9.7 終了コード
+### 9.8 終了コード
 
 | コード | 意味 | 主な対応 |
 | ---: | --- | --- |
@@ -549,7 +559,8 @@ Action: 安全な次の操作
 2. 同名の環境変数または dotenv の値が空でないことを確認する。
 3. `base_url` とモデル識別子を provider の案内と照合する。
 4. ネットワーク、利用枠、課金状態、モデルへのアクセス権を確認する。
-5. `story-pipeline validate` 後に `run` を再実行する。
+5. `story-pipeline check-llm` を実行して通常応答と構造化応答を確認する。
+6. `story-pipeline validate` 後に `run` を再実行する。
 
 秘密値を確認するために画面へ API キーを出力したり、要求へ貼り付けたりしないでください。
 

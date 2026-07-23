@@ -8,6 +8,7 @@ story-pipeline init [PATH]
 story-pipeline run
 story-pipeline status
 story-pipeline validate
+story-pipeline check-llm
 story-pipeline migrate-state
 ```
 
@@ -155,7 +156,16 @@ WARNING UNTRACKED_UNKNOWN_FILE file is not managed by Story Pipeline: notes.txt
 
 問題がなければ `Validation passed.`、警告だけなら件数を表示して `0`、エラーがあればエラー・警告件数を表示して `4` とする。自動修復、Git add、復元、フォーマット変更は行わない。
 
-## 7. `migrate-state`
+## 7. `check-llm`
+
+設定の全 role から重複を除いた各モデルへ、次の Chat Completions リクエストを実際に送信する。
+
+1. 固定文字列 `OK` を求める通常応答。
+2. strict JSON Schema に従う `{"ok": true}` を求める構造化応答。
+
+モデルごとに各検査の `PASS`、失敗時は `FAIL`、モデル参照、provider、API 上のモデル名、秘密値を除いた失敗分類と概要を表示する。全モデルが成功すれば `0`、1件以上失敗すれば `7` とする。作品ファイル、state、run、Git、ロックを変更しない。実 API 呼び出しのため、provider の利用量と料金が発生し得る。
+
+## 8. `migrate-state`
 
 `migrate-state` は、旧実装が本文採用後も `episode_planning` を指している既存状態を、章・話対応表から明示的に修正する。API は呼び出さない。
 
@@ -169,7 +179,7 @@ WARNING UNTRACKED_UNKNOWN_FILE file is not managed by Story Pipeline: notes.txt
 
 条件を満たす場合、phase、current/next chapter、next episode だけを再計算し、`.story-pipeline/state.json` を `Migrate story state` commit に保存する。作品ファイル、要求、run、既存 commit は変更しない。すでに正規状態なら変更も commit も作らない。
 
-## 8. エラー表示
+## 9. エラー表示
 
 捕捉済みエラーは原則として次の3行以内にする。
 
