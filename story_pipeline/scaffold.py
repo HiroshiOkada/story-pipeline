@@ -21,7 +21,10 @@ CONFIG_TEMPLATE = """{
   "models": {
     "default": {
       "provider": "openai",
-      "model": "gpt-4.1"
+      "model": "gpt-5.6-luna",
+      "parameters": {
+        "reasoning_effort": "none"
+      }
     }
   },
   "roles": {

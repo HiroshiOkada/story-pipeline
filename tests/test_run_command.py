@@ -187,7 +187,7 @@ class RunCommandIntegrationTest(unittest.TestCase):
         run = json.loads((self.root / ".story-pipeline/runs/0000.json").read_text())
         self.assertEqual(run["status"], "completed")
         self.assertEqual(json.loads((self.root / ".story-pipeline/state.json").read_text())["phase"], "foundation")
-        self.assertIn("Models: planner=gpt-4.1", output.getvalue())
+        self.assertIn("Models: planner=gpt-5.6-luna", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
         status = self.git("status", "--short").stdout.decode()
         self.assertEqual(status, "?? requests/0001.md\n")

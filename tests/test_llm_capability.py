@@ -44,7 +44,7 @@ class LLMCapabilityCommandTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(client.calls, [("chat", "default"), ("structured", "default")])
-        self.assertIn("PASS default (openai/gpt-4.1): chat completion", output.getvalue())
+        self.assertIn("PASS default (openai/gpt-5.6-luna): chat completion", output.getvalue())
         self.assertIn("LLM capability check passed: 1 model(s).", output.getvalue())
         self.assertEqual(errors.getvalue(), "")
 

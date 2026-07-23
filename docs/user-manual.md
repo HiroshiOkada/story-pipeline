@@ -148,7 +148,7 @@ Git identity が未設定などの理由で commit だけが失敗しても、�
 
 ### 4.1 初期設定
 
-`story-pipeline-config.jsonc` はコメントと末尾カンマを許す JSONC です。初期状態では OpenAI の `gpt-4.1` を全役割で使用します。
+`story-pipeline-config.jsonc` はコメントと末尾カンマを許す JSONC です。初期状態では OpenAI の `gpt-5.6-luna` を全役割で使用します。従来の非 reasoning 相当の速度とコスト特性を維持するため、`reasoning_effort` は `none` に設定します。
 
 ```jsonc
 {
@@ -165,7 +165,10 @@ Git identity が未設定などの理由で commit だけが失敗しても、�
   "models": {
     "default": {
       "provider": "openai",
-      "model": "gpt-4.1"
+      "model": "gpt-5.6-luna",
+      "parameters": {
+        "reasoning_effort": "none"
+      }
     }
   },
   "roles": {
