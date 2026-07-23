@@ -77,6 +77,7 @@ uv run --project /path/to/story-pipeline python -m unittest discover -s /path/to
 | `story-pipeline validate` | 設定、状態、成果物、Git の整合性を API 呼び出しなしで検査します。 |
 | `story-pipeline check-llm` | 利用する全モデルへ実リクエストを送り、通常応答と構造化 JSON 応答を検査します。 |
 | `story-pipeline migrate-state` | 章・話対応表と既存本文を検証し、旧実装の誤った制作状態を明示的に移行します。 |
+| `story-pipeline recover --abandon-active` | 未コミット情報を保全してから、成果物を基準に新しい要求を受理できる状態へ復旧します。 |
 | `story-pipeline run` | 最若番号の未処理要求を1件処理します。 |
 
 ## 安全な運用
@@ -92,6 +93,7 @@ uv run --project /path/to/story-pipeline python -m unittest discover -s /path/to
 - `run` は LLM 通信の開始、再試行待機、フォールバック、30秒ごとの heartbeat を JSON Lines で標準エラーへ出力します。prompt、応答本文、API キー、完全 URL は出力しません。
 - `.story-pipeline/runs/NNNN.json` に論理呼び出し、transport 試行、待機時間、provider usage、lifecycle、incident ID を記録します。usage が提供されない値は推測せず `null` / `unknown` のまま扱います。予期しない失敗時は標準エラーの incident ID を実行記録と照合できます。
 - 旧バージョンで章内最終話の後も次話計画を指している場合は、作業ツリーを整理して `story-pipeline migrate-state` を実行します。作品本文は変更せず、状態変更だけを専用 commit に保存します。
+- 通常の再開や状態移行ができない場合は `story-pipeline recover --abandon-active` を使います。Git 差分を先に保全 commit へ保存し、既存 run を削除せず active request と確認待ちを放棄して状態を再構築します。
 
 ## 開発者向け検証
 
