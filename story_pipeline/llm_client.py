@@ -130,7 +130,7 @@ class LLMClient:
         ]
         try:
             response, attempts, _ = self._complete_model(
-                reference, messages, None, max_tokens_override=8
+                reference, messages, None, max_tokens_override=128
             )
         except _ModelExhausted as exhausted:
             raise exhausted.failure from None
@@ -159,7 +159,7 @@ class LLMClient:
         }
         try:
             response, attempts, _ = self._complete_model(
-                reference, messages, response_format, max_tokens_override=32
+                reference, messages, response_format, max_tokens_override=256
             )
         except _ModelExhausted as exhausted:
             raise exhausted.failure from None

@@ -185,7 +185,7 @@ class LLMClientTest(unittest.TestCase):
         attempts = client.probe_structured_output("first")
 
         self.assertEqual(attempts, 1)
-        self.assertEqual(transport.calls[0]["max_tokens"], 32)
+        self.assertEqual(transport.calls[0]["max_tokens"], 256)
         response_format = transport.calls[0]["response_format"]
         self.assertEqual(response_format["type"], "json_schema")
         self.assertTrue(response_format["json_schema"]["strict"])
@@ -396,7 +396,7 @@ class MockApiIntegrationTest(unittest.TestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(MockHandler.attempts, 2)
         self.assertEqual(sleeps, [0.0])
-        self.assertEqual(MockHandler.bodies[0]["max_tokens"], 8)
+        self.assertEqual(MockHandler.bodies[0]["max_tokens"], 128)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ def main() -> int:
         "models": {
             "integration": {
                 "provider": "openrouter",
-                "model": "deepseek/deepseek-v4-flash",
-                "max_tokens": 16,
+                "model": "deepseek/deepseek-v4-flash:nitro",
+                "max_tokens": 32,
                 "parameters": {"temperature": 0},
             }
         },
@@ -30,8 +30,14 @@ def main() -> int:
         "request": {"timeout_seconds": 120, "retry_attempts": 2},
     }
     environment = load_environment(config)
-    attempts = LLMClient(config, environment).probe_model("integration")
-    print(f"OpenRouter connection passed: model=deepseek/deepseek-v4-flash attempts={attempts}")
+    client = LLMClient(config, environment)
+    chat_attempts = client.probe_model("integration")
+    structured_attempts = client.probe_structured_output("integration")
+    print(
+        "OpenRouter capability check passed: "
+        "model=deepseek/deepseek-v4-flash:nitro "
+        f"chat_attempts={chat_attempts} structured_attempts={structured_attempts}"
+    )
     return 0
 
 
