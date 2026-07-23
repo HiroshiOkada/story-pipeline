@@ -14,6 +14,7 @@ from story_pipeline.errors import StoryPipelineError
 from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
 from story_pipeline.git_safety import commit_initial_scaffold, inspect_initial_repository
+from story_pipeline.llm_capability import check_llm_command
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
@@ -58,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run", help="次の未処理要求を実行する")
     subparsers.add_parser("status", help="作品の現在状態を表示する")
     subparsers.add_parser("validate", help="作品と設定の整合性を検証する")
+    subparsers.add_parser("check-llm", help="LLM API の最低限の実行能力を検査する")
     subparsers.add_parser("migrate-state", help="作品ファイルから制作状態を明示的に移行する")
     return parser
 
@@ -75,6 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _show_status()
         elif args.command == "validate":
             return _validate_project()
+        elif args.command == "check-llm":
+            return check_llm_command(sys.stdout, sys.stderr)
         elif args.command == "run":
             return run_command(output=sys.stdout, error_output=sys.stderr)
         elif args.command == "migrate-state":
