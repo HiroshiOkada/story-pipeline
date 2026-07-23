@@ -1,0 +1,18 @@
+{
+  "phase": 27,
+  "date": "2026-07-23",
+  "provider": "openrouter",
+  "base_url": "https://openrouter.ai/api/v1",
+  "model": "deepseek/deepseek-v4-flash:nitro",
+  "checks": {
+    "chat_completion": {
+      "result": "passed",
+      "attempts": 1
+    },
+    "structured_json_schema": {
+      "result": "passed",
+      "attempts": 1
+    }
+  },
+  "secrets_recorded": false
+}

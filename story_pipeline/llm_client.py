@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import json
 import random
 import threading
 import time
@@ -129,12 +130,45 @@ class LLMClient:
         ]
         try:
             response, attempts, _ = self._complete_model(
-                reference, messages, None, max_tokens_override=8
+                reference, messages, None, max_tokens_override=128
             )
         except _ModelExhausted as exhausted:
             raise exhausted.failure from None
         if response.content.strip() != "OK":
             raise ApiFailure("invalid_response", "接続確認の固定応答が OK ではありません")
+        return attempts
+
+    def probe_structured_output(self, reference: str) -> int:
+        """JSON Schema に従う最小応答を生成できることを確認する。"""
+        messages = [
+            {"role": "system", "content": "Return the requested JSON object only."},
+            {"role": "user", "content": 'Return {"ok": true}.'},
+        ]
+        response_format: dict[str, Any] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "story_pipeline_capability_check",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean", "const": True}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        try:
+            response, attempts, _ = self._complete_model(
+                reference, messages, response_format, max_tokens_override=256
+            )
+        except _ModelExhausted as exhausted:
+            raise exhausted.failure from None
+        try:
+            value = json.loads(response.content)
+        except (TypeError, ValueError):
+            raise ApiFailure("invalid_response", "構造化応答を JSON object として解析できません") from None
+        if value != {"ok": True}:
+            raise ApiFailure("invalid_response", "構造化応答が要求した schema に適合しません")
         return attempts
 
     def _complete_model(

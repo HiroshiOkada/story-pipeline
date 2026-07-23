@@ -75,6 +75,7 @@ uv run --project /path/to/story-pipeline python -m unittest discover -s /path/to
 | `story-pipeline init [PATH]` | 空のディレクトリに作品プロジェクトと検証済み初期 commit を作成します。 |
 | `story-pipeline status` | 現在のフェーズと次の標準処理を副作用なしで表示します。 |
 | `story-pipeline validate` | 設定、状態、成果物、Git の整合性を API 呼び出しなしで検査します。 |
+| `story-pipeline check-llm` | 利用する全モデルへ実リクエストを送り、通常応答と構造化 JSON 応答を検査します。 |
 | `story-pipeline migrate-state` | 章・話対応表と既存本文を検証し、旧実装の誤った制作状態を明示的に移行します。 |
 | `story-pipeline run` | 最若番号の未処理要求を1件処理します。 |
 

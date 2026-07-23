@@ -178,6 +178,27 @@ class LLMClientTest(unittest.TestCase):
         self.assertEqual(len(result.fallbacks), 1)
         self.assertEqual(sleeps, [0.5])
 
+    def test_structured_output_probe_uses_strict_json_schema(self) -> None:
+        transport = SequenceTransport([ChatResponse('{"ok":true}', "a", "stop")])
+        client = LLMClient(self.config(), {"KEY": "secret"}, transport=transport)
+
+        attempts = client.probe_structured_output("first")
+
+        self.assertEqual(attempts, 1)
+        self.assertEqual(transport.calls[0]["max_tokens"], 256)
+        response_format = transport.calls[0]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+
+    def test_structured_output_probe_rejects_wrong_object(self) -> None:
+        transport = SequenceTransport([ChatResponse('{"ok":false}', "a", "stop")])
+        client = LLMClient(self.config(), {"KEY": "secret"}, transport=transport)
+
+        with self.assertRaises(ApiFailure) as caught:
+            client.probe_structured_output("first")
+
+        self.assertEqual(caught.exception.kind, "invalid_response")
+
     def test_transport_attempts_measure_retry_wait_and_missing_usage(self) -> None:
         class FakeClock:
             def __init__(self) -> None:
@@ -375,7 +396,7 @@ class MockApiIntegrationTest(unittest.TestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(MockHandler.attempts, 2)
         self.assertEqual(sleeps, [0.0])
-        self.assertEqual(MockHandler.bodies[0]["max_tokens"], 8)
+        self.assertEqual(MockHandler.bodies[0]["max_tokens"], 128)
 
 
 if __name__ == "__main__":
