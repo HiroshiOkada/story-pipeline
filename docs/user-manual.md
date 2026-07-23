@@ -18,6 +18,7 @@
 | 問題を調べる | `story-pipeline validate` | 設定、ファイル、状態、Git の検査結果 |
 | 要求を処理する | `story-pipeline run` | 作品成果物、報告、実行記録、Git commit |
 | 旧状態を直す | `story-pipeline migrate-state` | 安全条件を満たす場合だけ状態を移行 |
+| 壊れた進行状態から復旧する | `story-pipeline recover --abandon-active` | 未記録情報を保全して新規要求を受理できる状態へ復旧 |
 
 ## 章構成
 
@@ -473,7 +474,15 @@ story-pipeline check-llm
 
 実行前に active request がなく、ロックがなく、Git が通常状態で、章・話番号と完成済み本文が連続している必要があります。状態が既に正しければ何も変更しません。変更時は `Migrate story state` commit が作られます。
 
-### 9.8 終了コード
+### 9.8 `recover --abandon-active`
+
+状態ファイルや run の不整合により通常の `run`、`validate`、`migrate-state` では作業を再開できない場合に使用します。`--abandon-active` は、進行中要求、未処理レビュー、未回答判断を再開対象から外すことへの明示的な同意です。
+
+コマンドは最初に、ignored と `.env`、`run.lock` を除く未コミット差分を列挙し、`Preserve worktree before recovery` commit に保存します。保存できなければ状態を変更しません。その後、既存の構想・設定・構成・章対応表・本文から進行状態を再構築し、`.story-pipeline/state.json` だけを `Recover story state` commit に保存します。作品、要求、既存 run は削除しません。
+
+実行ロック、Git競合、連続していない章・話番号、章対応表にない本文がある場合は、安全に判断できないため停止します。復旧後は新しい要求ファイルへ内容を書き、通常どおり `story-pipeline run` を実行します。
+
+### 9.9 終了コード
 
 | コード | 意味 | 主な対応 |
 | ---: | --- | --- |
