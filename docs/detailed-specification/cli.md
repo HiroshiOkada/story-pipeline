@@ -10,6 +10,7 @@ story-pipeline status
 story-pipeline validate
 story-pipeline check-llm
 story-pipeline migrate-state
+story-pipeline recover --abandon-active
 ```
 
 - 引数なし、`-h`、`--help` はヘルプを標準出力へ表示し、終了コード `0` で終了する。
@@ -179,7 +180,17 @@ WARNING UNTRACKED_UNKNOWN_FILE file is not managed by Story Pipeline: notes.txt
 
 条件を満たす場合、phase、current/next chapter、next episode だけを再計算し、`.story-pipeline/state.json` を `Migrate story state` commit に保存する。作品ファイル、要求、run、既存 commit は変更しない。すでに正規状態なら変更も commit も作らない。
 
-## 9. エラー表示
+## 9. `recover`
+
+`recover --abandon-active` は、通常の検証や再開ができない作品を、既存成果物から新しい要求を受理できる状態へ戻す。既存 active request、pending review、pending decision を放棄するため、明示オプションを必須とする。API は呼び出さない。
+
+Git repository が通常状態で競合と実行ロックがないことを先に検査する。ignored と一時ファイルを除く tracked、staged、untracked の全差分は、パス一覧を表示して `Preserve worktree before recovery` commit に保存する。保全 commit が失敗した場合は復旧しない。
+
+その後、成果物の安全な通常ファイルだけを根拠として状態を再構築する。基礎成果物が不足する場合は最初の不足工程へ戻す。章・話対応表が存在する場合は連続性を検証し、実在本文の連続 prefix を `completed_episodes` とする。旧 state から安全に読める完了章 prefix だけを保持し、それ以外は最初の未完了章を章改稿対象とする。active request、pending review、pending decision は空にする。last request は既存 run ファイル番号の最大値とする。
+
+変更は `.story-pipeline/state.json` だけに書き、`Recover story state` commit に保存する。run、作品、要求、既存 commit は変更または削除しない。復旧後は新しい番号で run ファイルが存在しない要求を通常の `run` が選択できる。
+
+## 10. エラー表示
 
 捕捉済みエラーは原則として次の3行以内にする。
 
