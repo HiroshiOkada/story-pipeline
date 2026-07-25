@@ -89,7 +89,7 @@ def main(arguments: list[str] | None = None) -> int:
                 "story": index,
                 "passed": False,
                 "failures": ["HARNESS_FAILED"],
-                "diagnostic": {"exception_class": type(error).__name__},
+                "diagnostic": {"exception_class": type(error).__name__, "message": str(error)},
                 "wall_seconds": None,
                 "logical_calls": 0,
                 "transport_attempts": 0,
@@ -135,6 +135,9 @@ def _execute_story(
     root: Path, command: Path, environment: dict[str, str], premise: str
 ) -> StoryMeasurement:
     root.mkdir()
+    _run("git", "init", root)
+    _run("git", "-C", root, "config", "user.name", "Story Pipeline Integration")
+    _run("git", "-C", root, "config", "user.email", "integration@example.invalid")
     _run(command, "init", root, env=environment)
     _configure(root)
     measurements = []
@@ -152,7 +155,12 @@ def _execute_story(
         completed = _run(
             command, "run", cwd=root, env=environment, timeout=20 * 60, check=False
         )
-        run = _json(root / ".story-pipeline/runs" / f"{request_number:04d}.json")
+        run_path = root / ".story-pipeline/runs" / f"{request_number:04d}.json"
+        if not run_path.is_file():
+            raise RuntimeError(
+                f"run record not found for request {request_number:04d}: code={completed.returncode} stdout={completed.stdout!r} stderr={completed.stderr!r}"
+            )
+        run = _json(run_path)
         measurements.append(measure_run(run, phase))
         if completed.returncode != 0:
             raise StoryExecutionFailure(
