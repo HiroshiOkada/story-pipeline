@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-07-25T05:16:23.589843Z",
+  "finished_at": "2026-07-25T05:22:58.124708Z",
+  "model": "deepseek/deepseek-v4-flash:nitro",
+  "stories_completed": 3,
+  "passed": true,
+  "prior_cost_usd": "0",
+  "total_cost_usd": "0.0284913706",
+  "work_directory": "/home/hiroshi/proj/story-pipeline/.task/results/phase-032-integration-verification-work",
+  "results": [
+    {
+      "story": 1,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 123.75133778399322,
+      "logical_calls": 21,
+      "transport_attempts": 21,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.008329713",
+      "runs": [
+        {
+          "request_number": 0,
+          "phase": "concept",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000435344",
+          "elapsed_ms": 16449
+        },
+        {
+          "request_number": 1,
+          "phase": "foundation",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000865494",
+          "elapsed_ms": 17714
+        },
+        {
+          "request_number": 2,
+          "phase": "plotting",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001026298",
+          "elapsed_ms": 12892
+        },
+        {
+          "request_number": 3,
+          "phase": "episode_planning",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001203384",
+          "elapsed_ms": 12519
+        },
+        {
+          "request_number": 4,
+          "phase": "drafting",
+          "logical_calls": 4,
+          "transport_attempts": 4,
+          "draft_writer_calls": 1,
+          "cost_usd": "0.002476033",
+          "elapsed_ms": 28700
+        },
+        {
+          "request_number": 5,
+          "phase": "chapter_revision",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001485211",
+          "elapsed_ms": 14646
+        },
+        {
+          "request_number": 6,
+          "phase": "final_revision",
+          "logical_calls": 2,
+          "transport_attempts": 2,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000837949",
+          "elapsed_ms": 10381
+        }
+      ]
+    },
+    {
+      "story": 2,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 144.9550485810032,
+      "logical_calls": 21,
+      "transport_attempts": 21,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.011102721",
+      "runs": [
+        {
+          "request_number": 0,
+          "phase": "concept",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000508781",
+          "elapsed_ms": 11647
+        },
+        {
+          "request_number": 1,
+          "phase": "foundation",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001468460",
+          "elapsed_ms": 33756
+        },
+        {
+          "request_number": 2,
+          "phase": "plotting",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001508325",
+          "elapsed_ms": 17690
+        },
+        {
+          "request_number": 3,
+          "phase": "episode_planning",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001698151",
+          "elapsed_ms": 15096
+        },
+        {
+          "request_number": 4,
+          "phase": "drafting",
+          "logical_calls": 4,
+          "transport_attempts": 4,
+          "draft_writer_calls": 1,
+          "cost_usd": "0.002993627",
+          "elapsed_ms": 34048
+        },
+        {
+          "request_number": 5,
+          "phase": "chapter_revision",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001844843",
+          "elapsed_ms": 17330
+        },
+        {
+          "request_number": 6,
+          "phase": "final_revision",
+          "logical_calls": 2,
+          "transport_attempts": 2,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001080534",
+          "elapsed_ms": 5127
+        }
+      ]
+    },
+    {
+      "story": 3,
+      "passed": true,
+      "failures": [],
+      "wall_seconds": 124.60329055890907,
+      "logical_calls": 21,
+      "transport_attempts": 21,
+      "draft_writer_calls": 1,
+      "cost_usd": "0.0090589366",
+      "runs": [
+        {
+          "request_number": 0,
+          "phase": "concept",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000479752",
+          "elapsed_ms": 9507
+        },
+        {
+          "request_number": 1,
+          "phase": "foundation",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.0008991486",
+          "elapsed_ms": 20743
+        },
+        {
+          "request_number": 2,
+          "phase": "plotting",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001092728",
+          "elapsed_ms": 14473
+        },
+        {
+          "request_number": 3,
+          "phase": "episode_planning",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001241331",
+          "elapsed_ms": 11248
+        },
+        {
+          "request_number": 4,
+          "phase": "drafting",
+          "logical_calls": 4,
+          "transport_attempts": 4,
+          "draft_writer_calls": 1,
+          "cost_usd": "0.002615067",
+          "elapsed_ms": 39433
+        },
+        {
+          "request_number": 5,
+          "phase": "chapter_revision",
+          "logical_calls": 3,
+          "transport_attempts": 3,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.001785147",
+          "elapsed_ms": 14416
+        },
+        {
+          "request_number": 6,
+          "phase": "final_revision",
+          "logical_calls": 2,
+          "transport_attempts": 2,
+          "draft_writer_calls": 0,
+          "cost_usd": "0.000945763",
+          "elapsed_ms": 5412
+        }
+      ]
+    }
+  ]
+}

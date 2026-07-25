@@ -134,7 +134,8 @@ class LLMClient:
             )
         except _ModelExhausted as exhausted:
             raise exhausted.failure from None
-        if response.content.strip() != "OK":
+        text = response.content.strip().strip("`*\"'.# \t\n")
+        if text.upper() != "OK" and "OK" not in text.upper().split():
             raise ApiFailure("invalid_response", "接続確認の固定応答が OK ではありません")
         return attempts
 
