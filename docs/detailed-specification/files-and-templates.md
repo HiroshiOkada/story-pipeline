@@ -11,6 +11,7 @@ chapters/
 episode_plans/
 episodes/
 .story-pipeline/state.json
+.story-pipeline/runs/
 .gitignore
 ```
 
