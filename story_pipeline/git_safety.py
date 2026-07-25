@@ -37,11 +37,23 @@ def inspect_run_preconditions(root: Path, config: dict[str, Any]) -> GitPrefligh
         if entry.kind == "ignored":
             continue
         if entry.kind == "unmerged":
-            raise _git_error("競合を解消する必要があります", path)
+            raise _git_error(
+                "競合を解消する必要があります",
+                path,
+                "git status で競合ファイルを確認し、解消してマージ等の操作を完了してから再実行してください",
+            )
         if entry.index_status not in {".", "?"}:
-            raise _git_error("stage 済み変更があります", path)
+            raise _git_error(
+                "stage 済み変更があります",
+                path,
+                "自分の変更を commit するか git restore --staged で stage を取り消してから再実行してください",
+            )
         if entry.kind == "untracked" and classify_path(path, dotenv) == "managed":
-            raise _git_error("未追跡の CLI 管理ファイルがあります", path)
+            raise _git_error(
+                "未追跡の CLI 管理ファイルがあります",
+                path,
+                "CLI が管理する名前のファイルです。削除または別名に変更してから再実行してください",
+            )
     _inspect_index_flags(root, dotenv)
     return GitPreflight(tuple(entries), frozenset(dotenv))
 
@@ -258,5 +270,10 @@ def _entry_signatures(entries: tuple[WorktreeEntry, ...] | list[WorktreeEntry]) 
     }
 
 
-def _git_error(reason: str, location: str | Path) -> StoryPipelineError:
-    return StoryPipelineError(reason, str(location), "Git の状態を確認してから再実行してください", 5)
+def _git_error(reason: str, location: str | Path, action: str | None = None) -> StoryPipelineError:
+    return StoryPipelineError(
+        reason,
+        str(location),
+        action or "Git の状態を確認してから再実行してください",
+        5,
+    )

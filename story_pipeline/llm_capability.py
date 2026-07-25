@@ -9,7 +9,7 @@ from typing import TextIO
 from story_pipeline.config import load_config
 from story_pipeline.environment import load_environment
 from story_pipeline.llm_client import LLMClient
-from story_pipeline.llm_transport import ApiFailure
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.project import find_project_root
 
 
@@ -45,7 +45,9 @@ def check_llm_command(
             print(f"PASS {label}: structured JSON", file=output)
         except ApiFailure as failure:
             failures += 1
-            print(f"FAIL {label}: {failure.kind}: {failure.message}", file=error_output)
+            summary, action = describe_failure(failure)
+            print(f"FAIL {label}: {summary} (kind: {failure.kind})", file=error_output)
+            print(f"  対応: {action}", file=error_output)
     if failures:
         print(f"LLM capability check failed: {failures} model(s).", file=error_output)
         return EXIT_API

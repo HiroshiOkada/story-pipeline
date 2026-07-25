@@ -64,6 +64,8 @@ class LLMCapabilityCommandTest(unittest.TestCase):
         self.assertIn("chat completion", output.getvalue())
         self.assertIn("FAIL default", errors.getvalue())
         self.assertIn("invalid_request", errors.getvalue())
+        self.assertIn("API が要求を受け付けられませんでした", errors.getvalue())
+        self.assertIn("対応: 設定のモデル識別子と parameters を確認してください", errors.getvalue())
         self.assertIn("LLM capability check failed: 1 model(s).", errors.getvalue())
 
 

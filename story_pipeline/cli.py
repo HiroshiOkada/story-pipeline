@@ -15,6 +15,7 @@ from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
 from story_pipeline.git_safety import commit_initial_scaffold, inspect_initial_repository
 from story_pipeline.llm_capability import check_llm_command
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
@@ -93,6 +94,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except StoryPipelineError as error:
         return _error(error.reason, error.location, error.action, error.exit_code)
+    except ApiFailure as failure:
+        summary, action = describe_failure(failure)
+        print(f"Error: {summary}", file=sys.stderr)
+        print(f"Action: {action}", file=sys.stderr)
+        return 8 if failure.awaiting_human else 7
     except Exception:
         return _error(
             "予期しない内部エラーが発生しました。",
@@ -146,18 +152,18 @@ def _init_project(raw_path: str) -> int:
         )
     if any(entry.name != ".git" for entry in entries):
         return _error(
-            "初期化されていない空でないディレクトリです。",
+            "ディレクトリが空ではありません。",
             str(root),
-            "空のディレクトリを指定してください。",
+            "ファイルのない空のディレクトリを指定してください。",
             EXIT_CONFIG,
         )
 
     repository_exists = _is_git_repository(root)
     if (root / ".git").exists() and not repository_exists:
         return _error(
-            "既存の .git を Git repository として確認できません。",
+            "既存の .git を Git リポジトリとして確認できません。",
             str(root / ".git"),
-            "Git repository の状態を確認してください。",
+            "Git リポジトリの状態を確認してください。",
             EXIT_GIT,
         )
     if repository_exists:
@@ -167,7 +173,7 @@ def _init_project(raw_path: str) -> int:
         create_scaffold(root)
     except OSError:
         return _error(
-            "scaffold を作成できませんでした。",
+            "初期ファイル群を作成できませんでした。",
             str(root),
             "書き込み権限と空き容量を確認してください。",
             EXIT_IO,
@@ -196,8 +202,8 @@ def _init_project(raw_path: str) -> int:
             error.reason,
             error.location,
             (
-                "Git identity の user.name と user.email を設定し、作成済みの "
-                "scaffold 4ファイルだけを手動で commit してください。"
+                "git config user.name と git config user.email を設定し、"
+                "作成済みの初期ファイル4つだけを手動で commit してください。"
             ),
             EXIT_GIT,
         ) from error

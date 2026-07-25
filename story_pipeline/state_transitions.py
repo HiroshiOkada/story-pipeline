@@ -18,7 +18,7 @@ def transition_after_draft(
     current = state.get("current_chapter") or chapter.number
     if current != chapter.number:
         raise _transition_error(
-            "採用本文が current_chapter の収録話ではありません",
+            "採用された本文が、現在制作中の章に含まれる話ではありません",
             "/current_chapter",
         )
     completed = sorted(set((*state.get("completed_episodes", []), episode_number)))
@@ -58,7 +58,7 @@ def transition_after_chapter(
         missing = [number for number in chapter.episodes if number not in completed_episodes]
         if not missing:
             raise _transition_error(
-                "未完了章に未完了の収録話がありません",
+                "未完了の章に未制作の話がありません。章計画の収録話と制作状態が矛盾しています",
                 f"{chapter.path} ## 収録話",
             )
         return {

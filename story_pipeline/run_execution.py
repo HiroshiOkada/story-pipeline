@@ -17,7 +17,7 @@ from story_pipeline.draft_checkpoint import (
     write_draft_checkpoint,
 )
 from story_pipeline.execution_store import persist_finished_execution, persist_run_progress
-from story_pipeline.llm_transport import ApiFailure
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.persistence import atomic_write_text, sha256_file
 from story_pipeline.request_planner import plan_selected_request
 from story_pipeline.run_lifecycle import (
@@ -43,6 +43,8 @@ class RunExecutionResult:
     changed_files: tuple[str, ...]
     reason: str | None
     exit_code: int
+    action: str | None = None
+    location: str | None = None
 
 
 def execute_started_run(start: RunStart) -> RunExecutionResult:
@@ -82,7 +84,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         changed = workflow.internal_files
         status = workflow.status
         documents = workflow.documents if status == "completed" else ()
-        if documents and _changed_lines(start.root, documents) >= start.config["limits"]["max_changed_lines"]:
+        if documents and _changed_lines(start.root, documents) > start.config["limits"]["max_changed_lines"]:
             status = "awaiting_human"
             documents = ()
             workflow = WorkflowExecution(
@@ -92,7 +94,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
                 {},
                 workflow.calls,
                 workflow.evaluation,
-                "変更行数が設定上限以上のため分割判断が必要です",
+                "変更行数が設定上限を超えたため分割判断が必要です",
             )
 
         run, current = _begin(start, run, "adopt")
@@ -105,9 +107,9 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
                 checkpoint = load_draft_checkpoint(start.root, start.request.number)
                 if checkpoint is None or inspect_checkpoint_adoption(start.root, checkpoint) != "all":
                     raise StoryPipelineError(
-                        "本文、canon、人物状態を同一採用単位として確認できません",
+                        "本文と設定資料(canon・人物状態)を同時に保存できる状態か確認できませんでした",
                         workflow.internal_files[0],
-                        "checkpoint と出力 hash を検証してください",
+                        "作品ファイルを変更せず、story-pipeline validate の結果を確認してください",
                         4,
                     )
                 checkpoint = mark_checkpoint_adopted(
@@ -146,17 +148,22 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         )
     except BaseException as error:
         run = _record_client_events(start, run, current)
+        action = None
+        location = None
         if isinstance(error, (KeyboardInterrupt, TerminationSignal)):
             code = 143 if isinstance(error, TerminationSignal) else 130
             message = "実行が割り込まれました"
+            action = "作品の状態を validate で確認してから、同じ要求を再実行してください"
             component = "interruption"
         elif isinstance(error, StoryPipelineError):
             code = error.exit_code
             message = error.reason
+            action = error.action
+            location = error.location
             component = "workflow" if current == "generate" else "execution"
         elif isinstance(error, ApiFailure):
             code = 8 if error.awaiting_human else 7
-            message = error.message
+            message, action = describe_failure(error)
             component = "transport"
         else:
             code = 9
@@ -187,7 +194,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         else:
             persist_run_progress(start.root, run)
             state = start.state
-        return RunExecutionResult(run, state, planned, workflow, (), message, code)
+        return RunExecutionResult(run, state, planned, workflow, (), message, code, action, location)
 
 
 def _changed_document_paths(

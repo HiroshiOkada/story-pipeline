@@ -150,6 +150,7 @@ def read_worktree(root: Path) -> list[WorktreeEntry]:
             fields = record.split(" ", 10)
             if len(fields) == 11:
                 entries.append(WorktreeEntry(fields[10], "U", "U", "unmerged"))
+                continue
         raise _invalid_porcelain_record(record)
     return entries
 

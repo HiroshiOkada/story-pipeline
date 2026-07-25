@@ -41,7 +41,7 @@ def load_state(root: Path) -> dict[str, Any]:
 def validate_state_data(state: Any) -> dict[str, Any]:
     """メモリ上の state 値を読み込み時と同じ契約で検証する。"""
     if not isinstance(state, dict):
-        _invalid("object である必要があります。", "/")
+        _invalid("値のまとまり(object)である必要があります。", "/")
     _exact_keys(state, STATE_KEYS, "/")
     if _integer(state["schema_version"], "/schema_version") != 1:
         _invalid("1 を指定してください。", "/schema_version")
@@ -167,25 +167,25 @@ def _exact_keys(value: dict[str, Any], expected: set[str], location: str) -> Non
 
 def _object(value: Any, location: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        _invalid("object である必要があります。", location)
+        _invalid("値のまとまり(object)である必要があります。", location)
     return value
 
 
 def _array(value: Any, location: str) -> list[Any]:
     if not isinstance(value, list):
-        _invalid("array である必要があります。", location)
+        _invalid("値の並び(array)である必要があります。", location)
     return value
 
 
 def _string(value: Any, location: str) -> str:
     if not isinstance(value, str):
-        _invalid("string である必要があります。", location)
+        _invalid("文字列である必要があります。", location)
     return value
 
 
 def _integer(value: Any, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        _invalid("integer である必要があります。", location)
+        _invalid("整数である必要があります。", location)
     return value
 
 
@@ -193,7 +193,10 @@ def _invalid(reason: str, location: str, cause: BaseException | None = None) -> 
     error = StoryPipelineError(
         reason,
         location,
-        ".story-pipeline/state.json の該当箇所を修正してください。",
+        (
+            ".story-pipeline/state.json は直接編集できません。"
+            "story-pipeline recover --abandon-active で状態を復旧するか、問題を報告してください。"
+        ),
         EXIT_CONFIG,
     )
     if cause is None:

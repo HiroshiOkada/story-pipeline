@@ -38,7 +38,7 @@ uv run --project /path/to/story-pipeline python -m unittest discover -s /path/to
    cd my-story
    ```
 
-2. `story-pipeline-config.jsonc` の provider、model々の role を利用する API に合わせて設定します。初期値は OpenAI と `gpt-5.6-luna` です。
+2. `story-pipeline-config.jsonc` の provider、モデル、各 role を利用する API に合わせて設定します。初期値は OpenAI と `gpt-5.6-luna` です。
 3. 設定の `api_key_env` が示す環境変数を、`~/.env`、作品ルートの `.env`、またはプロセス環境に設定します。
 
    ```dotenv

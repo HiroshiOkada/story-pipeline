@@ -183,7 +183,12 @@ def find_episode_chapter(root: Path, episode_number: int) -> str:
     try:
         entries = sorted(directory.iterdir(), key=lambda path: path.name)
     except OSError as error:
-        raise _episode_planning_error("章計画ディレクトリを読み取れません") from error
+        raise StoryPipelineError(
+            "章計画ディレクトリを読み取れません",
+            str(directory),
+            "chapters ディレクトリの存在と読み取り権限を確認してください",
+            9,
+        ) from error
     for entry in entries:
         if not CHAPTER_FILE.fullmatch(entry.name) or entry.is_symlink() or not entry.is_file():
             continue

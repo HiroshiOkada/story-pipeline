@@ -19,13 +19,20 @@ from story_pipeline.run_lifecycle import (
     transition_lifecycle,
 )
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.run_start import prepare_run
 from story_pipeline.interruptions import TerminationSignal, capture_sigterm
 
 
 def run_command(*, output: TextIO, error_output: TextIO) -> int:
     """1要求を開始から報告、commit、次要求作成まで処理する。"""
-    start = prepare_run(output=output)
+    try:
+        start = prepare_run(output=output)
+    except ApiFailure as failure:
+        summary, action = describe_failure(failure)
+        print(f"Error: {summary}", file=error_output)
+        print(f"Action: {action}", file=error_output)
+        return 8 if failure.awaiting_human else 7
     if start is None:
         print("No pending request.", file=output)
         return 0
@@ -48,7 +55,7 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
                 start.root, result, error, _incident_component(error, "finalizing"), "write_report"
             )
             _print_incident(result, error_output)
-            return _interruption_code(error) or 9
+            return result.exit_code
         managed = tuple(dict.fromkeys((
             *result.changed_files,
             ".story-pipeline/state.json",
@@ -58,6 +65,7 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
         result = RunExecutionResult(
             transition_lifecycle(result.run, "committed"), result.state, result.planned,
             result.workflow, result.changed_files, result.reason, result.exit_code,
+            result.action, result.location,
         )
         persist_run_progress(start.root, result.run)
         try:
@@ -73,7 +81,7 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
                 start.root, result, error, _incident_component(error, "git"), "commit_outputs"
             )
             _print_incident(result, error_output)
-            return _interruption_code(error) or 9
+            return result.exit_code
         try:
             next_request = _next_request(start.root, start.request.number)
         except BaseException as error:
@@ -81,7 +89,7 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
                 start.root, result, error, _incident_component(error, "finalizing"), "next_request"
             )
             _print_incident(result, error_output)
-            return _interruption_code(error) or 9
+            return result.exit_code
         _print_result(result, report, next_request, output, error_output)
         code = result.exit_code
     finally:
@@ -93,7 +101,9 @@ def run_command(*, output: TextIO, error_output: TextIO) -> int:
                     start.root, result, error, _incident_component(error, "lock"), "release_lock"
                 )
                 _print_incident(result, error_output)
-            code = _interruption_code(error) or 9
+                code = result.exit_code
+            else:
+                code = _interruption_code(error) or 9
         finally:
             termination.__exit__(None, None, None)
     return code
@@ -115,8 +125,14 @@ def _finalization_failure(
         retryable=False,
     )
     safe_reason = "予期しない内部エラーが発生しました"
+    action = None
+    location = None
+    exit_code = _interruption_code(error) or 9
     if isinstance(error, StoryPipelineError):
         safe_reason = error.reason
+        action = error.action
+        location = error.location
+        exit_code = _interruption_code(error) or error.exit_code
         run = record_operational_error(
             run,
             step=step,
@@ -128,13 +144,19 @@ def _finalization_failure(
     return RunExecutionResult(
         run, result.state, result.planned, result.workflow, result.changed_files,
         safe_reason,
-        _interruption_code(error) or 9,
+        exit_code,
+        action,
+        location,
     )
 
 
 def _print_incident(result: RunExecutionResult, output: TextIO) -> None:
     incident = result.run["incidents"][-1]
     print(f"Error: {result.reason}", file=output)
+    if result.location:
+        print(f"Location: {result.location}", file=output)
+    if result.action:
+        print(f"Action: {result.action}", file=output)
     print(f"Incident: {incident['incident_id']}", file=output)
     print(f"Component: {incident['component']}", file=output)
 
@@ -188,6 +210,13 @@ def _print_result(
     print(f"Status: {result.run['status']}", file=target)
     if result.reason:
         print(f"Reason: {result.reason}", file=target)
+    if result.location:
+        print(f"Location: {result.location}", file=target)
+    action = result.action
+    if action is None and result.run["status"] == "awaiting_human":
+        action = "報告を確認し、次の要求ファイルに判断を記入してください"
+    if action:
+        print(f"Action: {action}", file=target)
     print("Changed files: " + (", ".join(result.changed_files) or "none"), file=target)
     models = sorted({(item["role"], item["api_model"]) for item in result.run["model_attempts"]})
     print("Models: " + (", ".join(f"{role}={model}" for role, model in models) or "none"), file=target)

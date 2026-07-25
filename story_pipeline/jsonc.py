@@ -28,11 +28,18 @@ def load_jsonc(path: Path) -> Any:
             _remove_trailing_commas(_replace_comments(source)),
             object_pairs_hook=_object_without_duplicate_keys,
         )
-    except (json.JSONDecodeError, ValueError) as error:
+    except json.JSONDecodeError as error:
         raise StoryPipelineError(
-            f"設定 JSONC が不正です: {error}",
+            f"設定ファイルの JSON 書式が不正です({error.lineno} 行目 {error.colno} 文字目)",
             str(path),
-            "コメント、末尾カンマ、JSON の構文を確認してください。",
+            "引用符・カンマ・括弧の対応を確認してください。",
+            EXIT_CONFIG,
+        ) from error
+    except ValueError as error:
+        raise StoryPipelineError(
+            f"設定ファイルの内容が不正です: {error}",
+            str(path),
+            "コメントの閉じ忘れやキーの重複がないか確認してください。",
             EXIT_CONFIG,
         ) from error
 

@@ -15,8 +15,9 @@ from story_pipeline.git_safety import (
     inspect_run_preconditions,
     restore_managed_files,
 )
-from story_pipeline.git_validation import classify_path, read_worktree
+from story_pipeline.git_validation import classify_path, read_worktree, validate_git
 from story_pipeline.run_lock import RunLock
+from story_pipeline.validation import IssueCollector
 
 
 class GitSafetyTest(unittest.TestCase):
@@ -51,6 +52,23 @@ class GitSafetyTest(unittest.TestCase):
         paths = {(entry.path, entry.rename_origin) for entry in entries}
         self.assertIn(("world.md", False), paths)
         self.assertIn(("concept.md", True), paths)
+
+    def test_porcelain_parser_reports_unmerged_entries(self) -> None:
+        self.create_conflict()
+
+        entries = read_worktree(self.root)
+
+        unmerged = {entry.path for entry in entries if entry.kind == "unmerged"}
+        self.assertIn("concept.md", unmerged)
+
+    def test_validate_git_reports_unmerged_paths(self) -> None:
+        self.create_conflict()
+        collector = IssueCollector()
+
+        validate_git(self.root, collector, self.config)
+
+        conflicts = [issue for issue in collector.issues if issue.code == "GIT_UNMERGED_PATH"]
+        self.assertEqual([issue.location for issue in conflicts], ["concept.md"])
 
     def test_preflight_rejects_staged_and_untracked_managed_files(self) -> None:
         self.write("story-pipeline-config.jsonc", '{"changed": true}\n')
@@ -159,6 +177,23 @@ class GitSafetyTest(unittest.TestCase):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+    def create_conflict(self) -> None:
+        """MERGE_HEAD を伴う競合状態を作る(merge は非ゼロ終了が前提)。"""
+        default_branch = self.git("branch", "--show-current").stdout.decode().strip()
+        self.git("checkout", "-q", "-b", "conflict-side")
+        self.write("concept.md", "side change\n")
+        self.git("add", "concept.md")
+        self.git("commit", "-q", "-m", "Side change")
+        self.git("checkout", "-q", default_branch)
+        self.write("concept.md", "main change\n")
+        self.git("add", "concept.md")
+        self.git("commit", "-q", "-m", "Main change")
+        subprocess.run(
+            ["git", "-C", str(self.root), "merge", "conflict-side"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
     def git(self, *arguments: str) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(

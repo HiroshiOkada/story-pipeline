@@ -74,6 +74,60 @@ class ApiFailure(Exception):
         return self.message
 
 
+# kind ごとの利用者向け案内。(概要, 復旧案) の順。
+_FAILURE_GUIDANCE: dict[ErrorKind, tuple[str, str]] = {
+    "authentication": (
+        "API の認証に失敗しました",
+        "設定の api_key_env が示す環境変数に API キーが正しく設定されているか確認してください",
+    ),
+    "invalid_request": (
+        "API が要求を受け付けられませんでした",
+        "設定のモデル識別子と parameters を確認してください",
+    ),
+    "unsupported_parameter": (
+        "モデルが受け付けない設定項目があります",
+        "設定の parameters から該当項目を取り除いてください",
+    ),
+    "model_unavailable": (
+        "モデルが現在利用できません",
+        "時間をおいて再実行するか、設定のモデル識別子を見直してください",
+    ),
+    "rate_limit": (
+        "API の利用制限に達しました",
+        "時間をおいて再実行してください。繰り返す場合は provider の利用上限を確認してください",
+    ),
+    "temporary": (
+        "API への接続に失敗しました",
+        "ネットワーク接続と provider の稼働状況を確認し、時間をおいて再実行してください",
+    ),
+    "context_length": (
+        "モデルのコンテキスト長を超えました",
+        "要求や追加資料を減らすか、コンテキスト長の大きいモデルへ変更してください",
+    ),
+    "output_truncated": (
+        "モデルの出力が途中で切れました",
+        "設定の max_tokens を増やすか、制作対象を分割してください",
+    ),
+    "safety_refusal": (
+        "モデルが安全上の理由で応答を拒否しました",
+        "要求や追加資料の内容を見直してください",
+    ),
+    "invalid_response": (
+        "モデルの応答形式が不正でした",
+        "時間をおいて再実行してください。繰り返す場合は設定のモデルを見直してください",
+    ),
+}
+
+
+def describe_failure(error: ApiFailure) -> tuple[str, str]:
+    """API 失敗を利用者向けの日本語の概要と復旧案へ変換する。"""
+    summary, action = _FAILURE_GUIDANCE[error.kind]
+    detail = error.message.strip()
+    if detail:
+        summary = f"{summary}(詳細: {detail})"
+    return summary, action
+
+
 OpenUrl = Callable[..., Any]
 
 

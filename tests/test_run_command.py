@@ -42,6 +42,17 @@ def concept(label: str = "採用案") -> str:
     return "\n\n".join(f"{heading}\n{label}" for heading in CONCEPT_HEADINGS) + "\n"
 
 
+def concept_with_lines(total: int) -> str:
+    """10 見出し + 10 本文行 + 9 空行の 29 行を基準に、指定行数の構想を作る。"""
+    blocks = []
+    extra = total - 29
+    for index, heading in enumerate(CONCEPT_HEADINGS):
+        body_lines = 1 + extra if index == 0 else 1
+        body = "\n".join(["内容"] * body_lines)
+        blocks.append(f"{heading}\n{body}")
+    return "\n\n".join(blocks) + "\n"
+
+
 def evaluation(decision: str) -> str:
     return json.dumps({
         "decision": decision,
@@ -204,6 +215,27 @@ class RunCommandIntegrationTest(unittest.TestCase):
         self.assertEqual(run["status"], "awaiting_human")
         self.assertTrue((self.root / "requests/0000_agent.md").is_file())
 
+    def test_changed_lines_at_limit_are_adopted(self) -> None:
+        config = self._config()
+        self.assertEqual(config["limits"]["max_changed_lines"], 999)
+        fake = FakeClient(config, [interpretation(), concept_with_lines(999), evaluation("accept")])
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / "concept.md").is_file())
+        self.assertEqual(self._run_record()["status"], "completed")
+
+    def test_changed_lines_beyond_limit_require_split_decision(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept_with_lines(1000), evaluation("accept")])
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+        self.assertEqual(code, 8)
+        self.assertFalse((self.root / "concept.md").exists())
+        run = self._run_record()
+        self.assertEqual(run["status"], "awaiting_human")
+        self.assertIn("変更行数が設定上限を超えたため分割判断が必要です", errors.getvalue())
+
     def test_failed_workflow_persists_resume_information(self) -> None:
         fake = FakeClient(self._config(), [interpretation(), "invalid", "invalid", "invalid"])
         with patch("story_pipeline.run_start.LLMClient", return_value=fake):
@@ -351,17 +383,40 @@ class RunCommandIntegrationTest(unittest.TestCase):
 
     def test_safe_git_error_reason_is_persisted_without_traceback(self) -> None:
         fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
-        failure = StoryPipelineError("指定ファイルを stage できません", "safe", "check", 5)
+        failure = StoryPipelineError(
+            "指定ファイルを stage できません", "safe", "Git の状態を確認してから再実行してください", 5
+        )
+        errors = io.StringIO()
         with (
             patch("story_pipeline.run_start.LLMClient", return_value=fake),
             patch("story_pipeline.run_command.commit_run_outputs", side_effect=failure),
         ):
-            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+            code = run_command(output=io.StringIO(), error_output=errors)
 
         run = self._run_record()
-        self.assertEqual(code, 9)
+        self.assertEqual(code, 5)
         self.assertEqual(run["errors"][-1]["category"], "git")
         self.assertEqual(run["errors"][-1]["message"], failure.reason)
+        self.assertIn("Action: Git の状態を確認してから再実行してください", errors.getvalue())
+
+    def test_pipeline_error_surfaces_action_and_location(self) -> None:
+        failure = StoryPipelineError(
+            "状態と章・話対応表が一致しません", "/current_chapter", "状態を validate で確認してください", 4
+        )
+
+        class FailingClient(FakeClient):
+            def complete_role(self, *_: object, **__: object) -> CompletionResult:
+                raise failure
+
+        fake = FailingClient(self._config(), [])
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        self.assertEqual(code, 4)
+        self.assertIn("Reason: 状態と章・話対応表が一致しません", errors.getvalue())
+        self.assertIn("Location: /current_chapter", errors.getvalue())
+        self.assertIn("Action: 状態を validate で確認してください", errors.getvalue())
 
     def test_sigint_is_recorded_as_interruption(self) -> None:
         self._assert_interruption(KeyboardInterrupt(), 130)
@@ -413,8 +468,23 @@ class RunCommandIntegrationTest(unittest.TestCase):
         with patch("story_pipeline.run_command.prepare_run", return_value=None):
             output = io.StringIO()
             code = run_command(output=output, error_output=io.StringIO())
-        self.assertEqual(code, 0)
-        self.assertEqual(output.getvalue(), "No pending request.\n")
+            self.assertEqual(code, 0)
+            self.assertEqual(output.getvalue(), "No pending request.\n")
+
+    def test_connection_failure_is_reported_with_guidance(self) -> None:
+        failure = ApiFailure("authentication", "No auth credentials found", 401)
+        fake = FakeClient(self._config(), [], probe_error=failure)
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        self.assertEqual(code, 7)
+        self.assertIn(
+            "Error: API の認証に失敗しました(詳細: No auth credentials found)", errors.getvalue()
+        )
+        self.assertIn("Action: 設定の api_key_env", errors.getvalue())
+        self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
+        self.assertFalse((self.root / ".story-pipeline/runs/0000.json").exists())
 
     def _config(self) -> dict[str, object]:
         from story_pipeline.config import load_config

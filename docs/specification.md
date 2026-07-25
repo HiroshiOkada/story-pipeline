@@ -401,11 +401,12 @@ scaffold は次の最小構成とする。
 ├── episode_plans/
 ├── episodes/
 ├── .story-pipeline/
-│   └── state.json
+│   ├── state.json
+│   └── runs/
 └── .gitignore
 ```
 
-`concept.md`、`world.md`、`characters.md`、`plot.md`、`style.md`、`canon.md` は、最初の要求処理で必要になった時点に CLI が生成する。`.story-pipeline/runs/` は最初の要求処理時に作成し、`.story-pipeline/run.lock` は CLI の実行中だけ作成する。
+`concept.md`、`world.md`、`characters.md`、`plot.md`、`style.md`、`canon.md` は、最初の要求処理で必要になった時点に CLI が生成する。`.story-pipeline/runs/` は実行記録の書込先を事前に保証するため初期化時に作成し、`.story-pipeline/run.lock` は CLI の実行中だけ作成する。
 
 ## 10. CLI
 
@@ -447,6 +448,7 @@ story-pipeline init       scaffold を生成する
 story-pipeline run        次の未処理要求を処理する
 story-pipeline status     現在のフェーズと進捗を表示する
 story-pipeline validate   設定、作品ファイル、状態の整合性を検査する
+story-pipeline check-llm  利用する全モデルの通常応答と構造化 JSON 応答を検査する
 story-pipeline migrate-state  検証済み作品ファイルから既存状態を明示的に移行する
 story-pipeline recover --abandon-active  未記録情報を保全し、成果物から待機状態を再構築する
 ```
@@ -484,6 +486,7 @@ LLM に処理判断、評価、変更対象などの機械処理用情報を求�
 
 ```jsonc
 {
+  "config_version": 1,
   // 先に存在する環境変数は .env の値で上書きしない。
   "dotenv": {
     "files": ["~/.env", ".env"]
@@ -506,19 +509,24 @@ LLM に処理判断、評価、変更対象などの機械処理用情報を求�
     },
     "writer-fallback": {
       "provider": "local",
-      "model": "example-local-model",
-      // 省略時は 128K（131072）を使用する。
+      "model": "example-local-model"
+      // max_tokens 省略時は 128K（131072）を使用する。
     }
   },
   "roles": {
+    "planner": ["writer-primary"],
     "writer": ["writer-primary", "writer-fallback"],
-    "reviewer": ["writer-primary"]
+    "reviewer": ["writer-primary"],
+    "reviser": ["writer-primary"],
+    "summarizer": ["writer-primary"]
   },
   "limits": {
     "generation_calls": 3,
     "review_calls": 3,
     "revision_calls": 3,
-    "retry_calls_per_request": 2
+    "summary_calls": 3,
+    "retry_calls_per_request": 2,
+    "max_changed_lines": 999
   },
   "request": {
     "timeout_seconds": 120,
@@ -535,7 +543,7 @@ LLM に処理判断、評価、変更対象などの機械処理用情報を求�
 
 - API キーそのものを設定ファイルへ記載しない。
 - 設定ファイルには API キーが格納された環境変数名を記載する。
-- `python-dotenv` を利用し、`.env` から環境変数を読み込めるようにする。
+- 外部依存を避けた独自の dotenv パーサーで、`.env` から環境変数を読み込めるようにする。
 - `.env` は作品ディレクトリ内に限定せず、HOME ディレクトリなど任意の場所を指定可能にする。
 - `~` を HOME ディレクトリへ展開する。
 - 起動時点で設定済みの環境変数を `.env` で上書きしない。
@@ -569,13 +577,18 @@ CLI は、現在のフェーズ、次に処理する話、完了した話、保�
 
 ```json
 {
+  "schema_version": 1,
   "phase": "drafting",
+  "next_chapter": 1,
   "next_episode": 4,
+  "completed_chapters": [],
   "completed_episodes": [1, 2, 3],
-  "current_arc": 1,
+  "current_chapter": 1,
   "pending_reviews": [],
   "pending_decisions": [],
-  "last_request": 4
+  "last_request": 4,
+  "active_request": null,
+  "updated_at": "2026-01-01T00:00:00Z"
 }
 ```
 
