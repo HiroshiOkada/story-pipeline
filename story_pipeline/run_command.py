@@ -19,13 +19,20 @@ from story_pipeline.run_lifecycle import (
     transition_lifecycle,
 )
 from story_pipeline.errors import StoryPipelineError
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.run_start import prepare_run
 from story_pipeline.interruptions import TerminationSignal, capture_sigterm
 
 
 def run_command(*, output: TextIO, error_output: TextIO) -> int:
     """1要求を開始から報告、commit、次要求作成まで処理する。"""
-    start = prepare_run(output=output)
+    try:
+        start = prepare_run(output=output)
+    except ApiFailure as failure:
+        summary, action = describe_failure(failure)
+        print(f"Error: {summary}", file=error_output)
+        print(f"Action: {action}", file=error_output)
+        return 8 if failure.awaiting_human else 7
     if start is None:
         print("No pending request.", file=output)
         return 0

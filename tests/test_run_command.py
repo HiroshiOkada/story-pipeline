@@ -468,8 +468,23 @@ class RunCommandIntegrationTest(unittest.TestCase):
         with patch("story_pipeline.run_command.prepare_run", return_value=None):
             output = io.StringIO()
             code = run_command(output=output, error_output=io.StringIO())
-        self.assertEqual(code, 0)
-        self.assertEqual(output.getvalue(), "No pending request.\n")
+            self.assertEqual(code, 0)
+            self.assertEqual(output.getvalue(), "No pending request.\n")
+
+    def test_connection_failure_is_reported_with_guidance(self) -> None:
+        failure = ApiFailure("authentication", "No auth credentials found", 401)
+        fake = FakeClient(self._config(), [], probe_error=failure)
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        self.assertEqual(code, 7)
+        self.assertIn(
+            "Error: API の認証に失敗しました(詳細: No auth credentials found)", errors.getvalue()
+        )
+        self.assertIn("Action: 設定の api_key_env", errors.getvalue())
+        self.assertFalse((self.root / ".story-pipeline/run.lock").exists())
+        self.assertFalse((self.root / ".story-pipeline/runs/0000.json").exists())
 
     def _config(self) -> dict[str, object]:
         from story_pipeline.config import load_config

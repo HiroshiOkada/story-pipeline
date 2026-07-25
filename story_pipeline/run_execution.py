@@ -17,7 +17,7 @@ from story_pipeline.draft_checkpoint import (
     write_draft_checkpoint,
 )
 from story_pipeline.execution_store import persist_finished_execution, persist_run_progress
-from story_pipeline.llm_transport import ApiFailure
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.persistence import atomic_write_text, sha256_file
 from story_pipeline.request_planner import plan_selected_request
 from story_pipeline.run_lifecycle import (
@@ -163,7 +163,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
             component = "workflow" if current == "generate" else "execution"
         elif isinstance(error, ApiFailure):
             code = 8 if error.awaiting_human else 7
-            message = error.message
+            message, action = describe_failure(error)
             component = "transport"
         else:
             code = 9

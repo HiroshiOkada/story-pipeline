@@ -15,6 +15,7 @@ from story_pipeline.environment import validate_environment
 from story_pipeline.git_validation import validate_git
 from story_pipeline.git_safety import commit_initial_scaffold, inspect_initial_repository
 from story_pipeline.llm_capability import check_llm_command
+from story_pipeline.llm_transport import ApiFailure, describe_failure
 from story_pipeline.project import find_project_root
 from story_pipeline.project_validation import validate_project_files
 from story_pipeline.run_command import run_command
@@ -93,6 +94,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except StoryPipelineError as error:
         return _error(error.reason, error.location, error.action, error.exit_code)
+    except ApiFailure as failure:
+        summary, action = describe_failure(failure)
+        print(f"Error: {summary}", file=sys.stderr)
+        print(f"Action: {action}", file=sys.stderr)
+        return 8 if failure.awaiting_human else 7
     except Exception:
         return _error(
             "予期しない内部エラーが発生しました。",

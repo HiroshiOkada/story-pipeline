@@ -17,7 +17,14 @@ from story_pipeline.errors import StoryPipelineError
 from story_pipeline.llm_client import LLMClient
 from story_pipeline.llm_connection import check_initial_connections
 from story_pipeline.llm_output import FieldRule, parse_json_object, validate_evaluation, validate_markdown
-from story_pipeline.llm_transport import ApiFailure, ChatResponse, ChatTransport, TokenUsage
+from story_pipeline.llm_transport import (
+    ApiFailure,
+    ChatResponse,
+    ChatTransport,
+    ErrorKind,
+    TokenUsage,
+    describe_failure,
+)
 from story_pipeline.secrets import REDACTED, SecretSanitizer
 
 
@@ -59,6 +66,15 @@ class LLMFoundationTest(unittest.TestCase):
             require_api_key("openrouter", {"api_key_env": "SECRET_NAME"}, {})
         self.assertEqual(caught.exception.exit_code, 4)
         self.assertIn("SECRET_NAME", caught.exception.location)
+
+    def test_describe_failure_covers_every_error_kind(self) -> None:
+        from typing import get_args
+
+        for kind in get_args(ErrorKind):
+            summary, action = describe_failure(ApiFailure(kind, "provider detail"))
+            self.assertTrue(summary, kind)
+            self.assertTrue(action, kind)
+            self.assertIn("詳細: provider detail", summary)
 
     def test_transport_sends_key_only_in_header(self) -> None:
         captured: dict[str, object] = {}
