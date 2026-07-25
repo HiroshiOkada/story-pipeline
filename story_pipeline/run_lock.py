@@ -129,7 +129,10 @@ def _lock_conflict(path: Path, root: Path) -> StoryPipelineError:
             return StoryPipelineError(
                 "停止した実行のロックが残っています",
                 str(path),
-                "validate の表示とプロセス不存在を確認してから手動で削除してください",
+                (
+                    "story-pipeline validate で状態を確認し、対象のプロセスが"
+                    "動いていないことを確かめてから .story-pipeline/run.lock を削除してください"
+                ),
                 6,
             )
         return _unsafe_existing_lock(path)
@@ -188,9 +191,12 @@ def _encode(record: LockRecord) -> bytes:
 
 def _unsafe_existing_lock(path: Path) -> StoryPipelineError:
     return StoryPipelineError(
-        "既存の実行ロックを安全に stale と判断できません",
+        "前回の実行ロックが残っていますが、安全に削除できるか判断できませんでした",
         str(path),
-        "ロック内容とプロセスを確認してください。自動削除は行いません",
+        (
+            ".story-pipeline/run.lock の内容と実行中のプロセスを確認してください。"
+            "ロックの自動削除は行いません"
+        ),
         6,
     )
 

@@ -158,7 +158,7 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(code, 4)
             self.assertEqual(stdout, "")
-            self.assertIn("空でないディレクトリ", stderr)
+            self.assertIn("空ではありません", stderr)
             self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
             self.assertEqual(list(root.iterdir()), [existing])
 

@@ -107,9 +107,9 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
                 checkpoint = load_draft_checkpoint(start.root, start.request.number)
                 if checkpoint is None or inspect_checkpoint_adoption(start.root, checkpoint) != "all":
                     raise StoryPipelineError(
-                        "本文、canon、人物状態を同一採用単位として確認できません",
+                        "本文と設定資料(canon・人物状態)を同時に保存できる状態か確認できませんでした",
                         workflow.internal_files[0],
-                        "checkpoint と出力 hash を検証してください",
+                        "作品ファイルを変更せず、story-pipeline validate の結果を確認してください",
                         4,
                     )
                 checkpoint = mark_checkpoint_adopted(

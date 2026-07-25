@@ -143,25 +143,25 @@ def _keys(value: dict[str, Any], required: set[str], location: str, *, optional:
 
 def _object(value: Any, location: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        _invalid("object である必要があります。", location)
+        _invalid("値のまとまり(object)である必要があります。", location)
     return value
 
 
 def _list(value: Any, location: str) -> list[Any]:
     if not isinstance(value, list):
-        _invalid("array である必要があります。", location)
+        _invalid("値の並び(array)である必要があります。", location)
     return value
 
 
 def _string(value: Any, location: str) -> str:
     if not isinstance(value, str):
-        _invalid("string である必要があります。", location)
+        _invalid("文字列である必要があります。", location)
     return value
 
 
 def _integer(value: Any, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        _invalid("integer である必要があります。", location)
+        _invalid("整数である必要があります。", location)
     return value
 
 
