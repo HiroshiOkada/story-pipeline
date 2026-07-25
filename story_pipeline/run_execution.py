@@ -82,7 +82,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         changed = workflow.internal_files
         status = workflow.status
         documents = workflow.documents if status == "completed" else ()
-        if documents and _changed_lines(start.root, documents) >= start.config["limits"]["max_changed_lines"]:
+        if documents and _changed_lines(start.root, documents) > start.config["limits"]["max_changed_lines"]:
             status = "awaiting_human"
             documents = ()
             workflow = WorkflowExecution(
@@ -92,7 +92,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
                 {},
                 workflow.calls,
                 workflow.evaluation,
-                "変更行数が設定上限以上のため分割判断が必要です",
+                "変更行数が設定上限を超えたため分割判断が必要です",
             )
 
         run, current = _begin(start, run, "adopt")

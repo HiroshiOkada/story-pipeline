@@ -42,6 +42,17 @@ def concept(label: str = "採用案") -> str:
     return "\n\n".join(f"{heading}\n{label}" for heading in CONCEPT_HEADINGS) + "\n"
 
 
+def concept_with_lines(total: int) -> str:
+    """10 見出し + 10 本文行 + 9 空行の 29 行を基準に、指定行数の構想を作る。"""
+    blocks = []
+    extra = total - 29
+    for index, heading in enumerate(CONCEPT_HEADINGS):
+        body_lines = 1 + extra if index == 0 else 1
+        body = "\n".join(["内容"] * body_lines)
+        blocks.append(f"{heading}\n{body}")
+    return "\n\n".join(blocks) + "\n"
+
+
 def evaluation(decision: str) -> str:
     return json.dumps({
         "decision": decision,
@@ -203,6 +214,27 @@ class RunCommandIntegrationTest(unittest.TestCase):
         run = json.loads((self.root / ".story-pipeline/runs/0000.json").read_text())
         self.assertEqual(run["status"], "awaiting_human")
         self.assertTrue((self.root / "requests/0000_agent.md").is_file())
+
+    def test_changed_lines_at_limit_are_adopted(self) -> None:
+        config = self._config()
+        self.assertEqual(config["limits"]["max_changed_lines"], 999)
+        fake = FakeClient(config, [interpretation(), concept_with_lines(999), evaluation("accept")])
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / "concept.md").is_file())
+        self.assertEqual(self._run_record()["status"], "completed")
+
+    def test_changed_lines_beyond_limit_require_split_decision(self) -> None:
+        fake = FakeClient(self._config(), [interpretation(), concept_with_lines(1000), evaluation("accept")])
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+        self.assertEqual(code, 8)
+        self.assertFalse((self.root / "concept.md").exists())
+        run = self._run_record()
+        self.assertEqual(run["status"], "awaiting_human")
+        self.assertIn("変更行数が設定上限を超えたため分割判断が必要です", errors.getvalue())
 
     def test_failed_workflow_persists_resume_information(self) -> None:
         fake = FakeClient(self._config(), [interpretation(), "invalid", "invalid", "invalid"])
