@@ -34,7 +34,7 @@ def load_config(root: Path) -> dict[str, Any]:
     path = root / "story-pipeline-config.jsonc"
     value = load_jsonc(path)
     if not isinstance(value, dict):
-        _invalid("トップレベルは object である必要があります。", "/")
+        _invalid("トップレベルは値のまとまり(object)である必要があります。", "/")
     config = deepcopy(value)
     _keys(config, {"config_version", "dotenv", "providers", "models", "roles", "limits", "request"}, "/")
     if _integer(config["config_version"], "/config_version") != 1:
