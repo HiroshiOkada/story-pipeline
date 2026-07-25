@@ -43,6 +43,8 @@ class RunExecutionResult:
     changed_files: tuple[str, ...]
     reason: str | None
     exit_code: int
+    action: str | None = None
+    location: str | None = None
 
 
 def execute_started_run(start: RunStart) -> RunExecutionResult:
@@ -146,13 +148,18 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         )
     except BaseException as error:
         run = _record_client_events(start, run, current)
+        action = None
+        location = None
         if isinstance(error, (KeyboardInterrupt, TerminationSignal)):
             code = 143 if isinstance(error, TerminationSignal) else 130
             message = "実行が割り込まれました"
+            action = "作品の状態を validate で確認してから、同じ要求を再実行してください"
             component = "interruption"
         elif isinstance(error, StoryPipelineError):
             code = error.exit_code
             message = error.reason
+            action = error.action
+            location = error.location
             component = "workflow" if current == "generate" else "execution"
         elif isinstance(error, ApiFailure):
             code = 8 if error.awaiting_human else 7
@@ -187,7 +194,7 @@ def execute_started_run(start: RunStart) -> RunExecutionResult:
         else:
             persist_run_progress(start.root, run)
             state = start.state
-        return RunExecutionResult(run, state, planned, workflow, (), message, code)
+        return RunExecutionResult(run, state, planned, workflow, (), message, code, action, location)
 
 
 def _changed_document_paths(

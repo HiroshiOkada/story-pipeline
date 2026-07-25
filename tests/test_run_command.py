@@ -383,17 +383,40 @@ class RunCommandIntegrationTest(unittest.TestCase):
 
     def test_safe_git_error_reason_is_persisted_without_traceback(self) -> None:
         fake = FakeClient(self._config(), [interpretation(), concept(), evaluation("accept")])
-        failure = StoryPipelineError("指定ファイルを stage できません", "safe", "check", 5)
+        failure = StoryPipelineError(
+            "指定ファイルを stage できません", "safe", "Git の状態を確認してから再実行してください", 5
+        )
+        errors = io.StringIO()
         with (
             patch("story_pipeline.run_start.LLMClient", return_value=fake),
             patch("story_pipeline.run_command.commit_run_outputs", side_effect=failure),
         ):
-            code = run_command(output=io.StringIO(), error_output=io.StringIO())
+            code = run_command(output=io.StringIO(), error_output=errors)
 
         run = self._run_record()
-        self.assertEqual(code, 9)
+        self.assertEqual(code, 5)
         self.assertEqual(run["errors"][-1]["category"], "git")
         self.assertEqual(run["errors"][-1]["message"], failure.reason)
+        self.assertIn("Action: Git の状態を確認してから再実行してください", errors.getvalue())
+
+    def test_pipeline_error_surfaces_action_and_location(self) -> None:
+        failure = StoryPipelineError(
+            "状態と章・話対応表が一致しません", "/current_chapter", "状態を validate で確認してください", 4
+        )
+
+        class FailingClient(FakeClient):
+            def complete_role(self, *_: object, **__: object) -> CompletionResult:
+                raise failure
+
+        fake = FailingClient(self._config(), [])
+        errors = io.StringIO()
+        with patch("story_pipeline.run_start.LLMClient", return_value=fake):
+            code = run_command(output=io.StringIO(), error_output=errors)
+
+        self.assertEqual(code, 4)
+        self.assertIn("Reason: 状態と章・話対応表が一致しません", errors.getvalue())
+        self.assertIn("Location: /current_chapter", errors.getvalue())
+        self.assertIn("Action: 状態を validate で確認してください", errors.getvalue())
 
     def test_sigint_is_recorded_as_interruption(self) -> None:
         self._assert_interruption(KeyboardInterrupt(), 130)
